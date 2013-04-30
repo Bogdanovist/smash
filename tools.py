@@ -4,251 +4,15 @@ import matplotlib.animation as animation
 import pylab
 import numpy as np
 
-class Player(object):
-    """
-    Player object
-
-    Parameters
-    ----------
-    team : 1 or -1. Can be interpreted as team=1 -> scores to the right
-    """
-    def __init__(self,layout,size,x,y,top_speed,acc,jersey,team,angle_of_motion=0):
-        self.layout=layout
-        self.size=size
-        self.pid=0 # Actual PIDs get set when player is registered to a layout.
-        self.x=float(x)
-        self.y=float(y)
-        self.top_speed=top_speed
-        self.acc=acc
-        self.jersey=jersey
-        self.team=team
-        self.angle=angle_of_motion
-        # A generic tackling/blocking ability placeholder
-        self.strength=1
-        #
-        self.current_speed=0.
-        self.x_objective=0.
-        self.y_objective=0.
-        ### Define how to resolve collisions between opposing team players
-        # A player not wanting to block will instead try to evade, for instance
-        # to get around a blocker to make a tackle, or get clear to make a lead
-        # for a pass.
-        self.want_to_block=True
-        # Setup behaviours
-        self.set_ai_config()
-
-    def set_ai_config(self):
-        " Defines postional play."
-        pass
-
-    # Define Objective functions.
-    # These are provided here as a resource for child classes.
-    # Objective methods set where you are trying to go, move tries to get you
-    # there within the constraints of your motion (i.e. turning rate, speed,...)
-    def objective(self):
-        pass
-
-    def set_objective(self,blah):
-        self.objective=blah
-
-    def get_loose_ball(self):
-        """
-        Set objective to ball location
-        """
-        self.x_objective = self.layout.xball
-        self.y_objective = self.layout.yball
-
-    def run_to_goal(self):
-        """
-        Run towards offensive end zone, avoiding opponents.
-        """
-        # This could be replaced by angle to end zone corner?
-        max_angle_to_run = 45.
-        angle_step=5
-        pi=4.*math.atan(1.)
-        deg2rad=pi/180.
-
-        # Set defaults in case there are no obstacles in our path.
-        # NOTE: This is sub-optimal in the case that any defenders behind
-        # us can run faster than us.
-
-        best_y = self.y
-        if self.team == 1:
-            best_x = self.layout.xsize
-        else:
-            best_x = 0
-
-        # Find equations of the p.b. of all goalward opponents
-        pb_eqs=list()
-        for p in self.layout.players.values():
-            if self.team != p.team:
-                if self.dist_to_goal() > p.dist_to_their_goal():
-                    # Maths!
-                    Px,Py = (self.x+p.x)/2. , (self.y+p.y)/2.
-                    if self.y == p.y:
-                        # m would be infinite, describe eq differently
-                        # and denote by eq[3]=-1
-                        pb_eqs.append((p.pid,Px,0,-1))
-                    else:
-                        m=-1./( (self.y-p.y)/(self.x-p.x))
-                        #if p.x > self.x : m *= -1
-                        b = Py - m*Px
-                        pb_eqs.append((p.pid,m,b,0))
-        #for e in pb_eqs: print("eqs",e)
-        ang_start = np.floor(-max_angle_to_run)
-        ang_end = np.ceil(max_angle_to_run)
-        if self.team == -1:
-            ang_start += 180
-            ang_end += 180
-        greatest_gain=0.
-        for ang in np.arange(ang_start,ang_end,angle_step):
-            # find eq of line from me at angle
-            m=math.tan(ang*deg2rad)
-            b=self.y - m*self.x
-            # Find shortest intersection distance
-            shortest_dist=-1
-            for eq in pb_eqs:
-                if eq[2] == -1:
-                    dist=abs(self.x-eq[1])
-                else:
-                    xi=(b-eq[2])/(eq[1]-m)
-                    yi=m*xi+b
-                    dist=np.sqrt( (self.x-xi)**2 + (self.y-yi)**2)
-               # print("test ",ang,m,b,dist,np.floor(xi),np.floor(yi))
-                if dist < shortest_dist or shortest_dist < 0.:
-                    shortest_dist=dist
-                    shortest_x=xi
-                    shortest_y=yi
-           # print("check",shortest_dist,greatest_gain,pb_eqs)
-            if shortest_dist > greatest_gain:
-                greatest_gain = shortest_dist
-                best_x=shortest_x
-                best_y=shortest_y
-               # print("gain",best_x,best_y,shortest_dist,greatest_gain)
-        #print("clever",greatest_gain,best_x,best_y)
-        self.x_objective = best_x
-        self.y_objective = best_y
-
-    def tackle_ball_carrier(self):
-        """
-        Run to ball carrier and try to tackle.
-        """
-        dill=self.layout.players[self.layout.ball_carrier]
-
-        if self.dist_to_other(dill) < self.size*1.5:
-            self.x_objective = dill.x
-            self.y_objective = dill.y
-        else:
-            # Run to point D in front of ball carrier, where D is the distance
-            # between self and the carrier.
-            self.x_objective = dill.x + self.dist_to_other(dill)*(-self.team)
-            self.y_objective = dill.y
-        self.want_to_block=False
-
-    def protect_ball_carrier(self):
-        """
-        Get between ball carrier and opponents.
-        """
-        carrier=self.layout.players[self.layout.ball_carrier]
-        
-        # Who to block? We could try and block nearest baddy to us, but they might not be
-        # a threat to the carrier. We could try to block the one nearest the carrier, but
-        # there might be one closer to us we could better block.
-
-    def move(self):
-        """
-        Move method for each tick update.
-        """
-        # This uses some geometry from the notebook that I am not yet
-        # convinced about...
-        # We are ignoring \delta_t by calling it unity, so V and A need to be in appropriate
-        # units to reflect that.
-
-        pi=4.*math.atan(1.)
-        vx=self.current_speed*math.cos(self.angle)
-        vy=self.current_speed*math.sin(self.angle)
-        acc_angle=math.atan2(self.y + vy - self.y_objective,self.x + vx - self.x_objective)
-        # ???
-        acc_angle += pi
-
-        # Update velocity, ensuring we stay below speed limit
-        vx_new = vx + self.acc*math.cos(acc_angle)
-        vy_new = vy + self.acc*math.sin(acc_angle)
-        self.angle = math.atan2(vy_new,vx_new)
-        self.current_speed = min(np.sqrt( vx_new**2 + vy_new**2),self.top_speed)
-        
-        # Update position
-        self.x += vx_new
-        self.y += vy_new
-        
-        # Check if we can make it to objective
-        #if np.sqrt((self.x_objective-self.x)**2 + (self.y_objective-self.y)**2) < self.speed:
-        #    self.x = self.x_objective
-        #    self.y = self.y_objective
-        #else:
-        #    if self.y_objective == self.y:
-        #        if self.x_objective > self.x:
-        #            self.x += self.speed
-        #        else:
-        #            self.x -= self.speed
-        #    else:
-        #        self.angle = math.atan2(self.y_objective-self.y,self.x_objective-self.x)
-        #        self.x += self.speed * math.cos(self.angle)
-        #        self.y += self.speed * math.sin(self.angle)
-        # Ensure players stay in bounds
-        self.x = min(self.x,self.layout.xsize)
-        self.x = max(self.x,0)
-        self.y = min(self.y,self.layout.ysize)
-        self.y = max(self.y,0)
-
-    def move_at_angle(self,angle,amount):
-        """
-        Utililty method used by some collision resolutions. Just geometry.
-        """
-        self.x += amount * math.cos(angle)
-        self.y += amount * math.sin(angle)
-    
-    def dist_to_goal(self):
-        """
-        Returns shortest distance to offensive end zone.
-        """
-        if self.team == 1:
-            return self.layout.xsize - self.x
-        else:
-            return self.x
-
-    def dist_to_their_goal(self):
-        """
-        Returns shortest distance to deffensive end zone.
-        """
-        if self.team == -1:
-            return self.layout.xsize - self.x
-        else:
-            return self.x
-
-    def dist_to_other(self,other):
-        """
-        Returns distance between self and other
-        """
-        return np.sqrt( (self.x-other.x)**2 + (self.y-other.y)**2)
-    
-    def has_ball(self):
-        """
-        Boolean of whether this player is carrying the ball.
-        """
-        if self.pid == self.layout.ball_carrier:
-            return True
-        else:
-            return False
-
 class move_data(object):
     " Struct for storing moves "
-    def __init__(self,pid,x,y,angle,have_ball):
+    def __init__(self,pid,x,y,angle,have_ball,state):
         self.pid=pid
         self.x=x
         self.y=y
         self.angle=angle
         self.have_ball=have_ball
+        self.state=state
         
 class player_data(object):
     " Struct for storing player meta data for transfer."
@@ -298,38 +62,57 @@ class Layout(object):
         iframe=0
         while iframe < nticks:
             moves=self.moves[iframe]
-            x=list()
-            y=list()
-            t=list()
-            for elem in moves:
-                x.append(elem.x)
-                y.append(elem.y)
-                t.append(self.player_header[elem.pid].team)
+            #x=list()
+            #y=list()
+            #t=list()
+            #s=list()
+            #for elem in moves:
+            #    x.append(elem.x)
+            #    y.append(elem.y)
+            #    t.append(self.player_header[elem.pid].team)
+            #    s.append(elem.state)
             iframe = iframe + 1
-            yield x,y,t
+            #yield x,y,t
+            yield moves
 
     def frame_display(self,frame_data):
-        x,y,t = frame_data[0], frame_data[1], frame_data[2]
-        hx = list()
-        hy = list()
-        ax = list()
-        ay = list()
-        bx = list()
-        by = list()
-        for z in zip(x,y,t):
-            if z[2] == 1:
-                hx.append(z[0])
-                hy.append(z[1])
-            elif z[2] == -1:
-                ax.append(z[0])
-                ay.append(z[1])
-            else:
-                bx.append(z[0])
-                by.append(z[1])
-        self.home_team_plot.set_data(hx,hy)
-        self.away_team_plot.set_data(ax,ay)
-        self.ball_plot.set_data(bx,by)
+        #x,y,t = frame_data[0], frame_data[1], frame_data[2]
+        #hx = list()
+        #ax = list()
+        #ay = list()
+        #bx = list()
+        #by = list()
+        #for z in zip(x,y,t):
+        #    if z[2] == 1:
+        #        hx.append(z[0])
+        #        hy.append(z[1])
+        #    elif z[2] == -1:
+        #        ax.append(z[0])
+        #        ay.append(z[1])
+        #    else:
+        #        bx.append(z[0])
+        #        by.append(z[1])
+        #self.home_team_plot.set_data(hx,hy)
+        #self.away_team_plot.set_data(ax,ay)
+        #self.ball_plot.set_data(bx,by)
         #return self.home_team_plot,self.away_team_plot,self.ball_plot
+        for move, p in zip(frame_data,self.plots):
+            if move.state == 0:
+                shape='v'
+            else:
+                shape='o'
+
+            if self.player_header[move.pid].team == 1:
+                col='r'
+            elif self.player_header[move.pid].team == -1:
+                col='b'
+            else:
+                col='g'
+                shape='o'
+            p.set_data(move.x,move.y)
+            p.set_marker(shape)
+            p.set_color(col)
+            
 
     def run_game(self):
         " Run the game "
@@ -349,18 +132,25 @@ class Layout(object):
         plt.xlim([0,self.xsize])
         plt.ylim([0,self.ysize])
         
-        self.home_team_plot, = plt.plot([], [], 'ro',markersize=15)
-        self.away_team_plot, = plt.plot([], [], 'bo',markersize=15)
-        self.ball_plot, = plt.plot([],[],'go')
-        #self.circle1 = pylab.Circle((0,0), radius=5, alpha=.5)
-        #axes.add_patch(circle1)
-        line_ani = animation.FuncAnimation(fig1,self.frame_display,self.frame_data,interval=9,blit=False,repeat=True)
+        self.plots=list()
+        for p in self.players.values():
+            if p.team == 1:
+                plot_now, = plt.plot([], [], 'ro',markersize=15)
+            else:
+                plot_now, = plt.plot([], [], 'bo',markersize=15)
+            self.plots.append(plot_now)
+        plot_now, =  plt.plot([],[],'go')
+        self.plots.append(plot_now)
+        line_ani = animation.FuncAnimation(fig1,self.frame_display,self.frame_data,interval=15,blit=False,repeat=True)
         plt.show()
 
     def tick(self):
         """
         Iterate one tick.
         """
+        # Stand prone players up
+        for p in self.players.values():
+            p.standup()
         # Run current objective functions for all players.
         for p in self.players.values():
             p.objective()
@@ -378,11 +168,11 @@ class Layout(object):
         tick_moves=list()
         for p in self.players.values():
             have_ball = p.pid == self.ball_carrier
-            add_move=move_data(p.pid,p.x,p.y,p.angle,have_ball)
+            add_move=move_data(p.pid,p.x,p.y,p.angle,have_ball,p.state)
             tick_moves.append(add_move)
         # Ball position,use pid=0 for ball
         ball_carried = self.ball_carrier != 0
-        add_move=move_data(0,self.xball,self.yball,0,ball_carried)
+        add_move=move_data(0,self.xball,self.yball,0,ball_carried,0)
         tick_moves.append(add_move)
         #
         self.moves.append(tick_moves)
@@ -413,6 +203,9 @@ class Layout(object):
             for thatP in self.players.values():
                 if thisP.pid == thatP.pid:
                     continue
+                elif thisP.state == 0 or thatP.state == 0:
+                    # Prone players can be run over
+                    continue
                 else:
                     dist = np.sqrt( (thisP.x-thatP.x)**2 + (thisP.y-thatP.y)**2 )\
                         - thisP.size - thatP.size
@@ -428,15 +221,37 @@ class Layout(object):
         # Very simple (and unphysical) implementations for now.
         for c in self.collisions:
             if c[0].team == c[1].team:
+                # THIS IS TURNED OFF BY THE CONTINUE
+                #continue
+                # Conserve momentum, but completely inelastic collision
+                px_before = c[0].current_speed * math.cos(c[0].angle) +\
+                    c[1].current_speed* math.cos(c[1].angle)
+                py_before = c[0].current_speed * math.sin(c[0].angle) +\
+                    c[1].current_speed* math.sin(c[1].angle)
+                p_before = np.sqrt(px_before**2 + py_before**2)
+                pa_before = math.atan2(py_before,px_before)
+                xb,yb = (c[0].x+c[1].x)/2., (c[0].y + c[1].y)/2.
+                # Assume equal 'mass' so divide momentum by 2
+                xa,ya = xb - px_before * math.cos(pa_before/2.), yb - py_before * math.sin(pa_before/2.)
+                c[0].current_speed = p_before/2.
+                c[1].current_speed = p_before/2.
+                c[0].angle = pa_before
+                c[1].angle = pa_before
+                # Offset from center of mass
+                ang = math.atan2( c[1].y-c[0].y, c[1].x-c[0].x)
+                c[0].x = xa + c[0].size*math.cos(ang)*1.1
+                c[1].x = xa - c[1].size*math.cos(ang)*1.1
+                c[0].y = ya + c[0].size*math.sin(ang)*1.1
+                c[1].y = ya - c[1].size*math.sin(ang)*1.1                              
                 # Same team, move out of the way
-                if c[0].x > c[1].x:
-                    c[0].x += c[0].size
-                else:
-                    c[1].x += c[1].size
-                if c[0].y > c[1].y:
-                    c[0].y += c[0].size
-                else:
-                    c[1].y += c[1].size                
+                #if c[0].x > c[1].x:
+                #    c[0].x += c[0].size
+                #else:
+                #    c[1].x += c[1].size
+                #if c[0].y > c[1].y:
+                #    c[0].y += c[0].size
+                #else:
+                #    c[1].y += c[1].size                
             else:
                 # Opposing team players. Test for tackle.
                 if c[0].has_ball() or c[1].has_ball():
@@ -446,25 +261,68 @@ class Layout(object):
                     else:
                         tackler=c[0]
                         carrier=c[1]
-                    
-                    # Just randomly scatter ball for now
-                    self.ball_carrier=0
-
-                elif c[0].want_to_block and c[1].want_to_block:
-                    # Move each player back along angle of motion by half overlap distance
-                    #c[0].move_at_angle(c[0].angle-180.,c[2]/2.)
-                    #c[1].move_at_angle(c[1].angle-180.,c[2]/2.)
-                    pass
-                elif ~c[0].want_to_block and ~c[1].want_to_block:
-                    # For now, same as blocking. No evading implemented yet..
-                    #c[0].move_at_angle(c[0].angle-180.,c[2]/2.)
-                    #c[1].move_at_angle(c[1].angle-180.,c[2]/2.)
-                    pass
+                    self.resolve_tackle(tackler,carrier)
+                elif c[0].want_to_block or c[1].want_to_block:
+                    self.resolve_block(c[0],c[1])
                 else:
-                    # No evading implemented, so just repeat double block from above
-                    #c[0].move_at_angle(c[0].angle-180.,c[2]/2.)
-                    #c[1].move_at_angle(c[1].angle-180.,c[2]/2.)
+                    # No one wants to block.
+                    # For now, let them run through each other.
                     pass
+
+    def resolve_tackle(self,tackler,carrier):
+        # Magic numbers
+        scatter_amount=10
+        tackle_count=5
+        
+        tackle_odds = tackler.strength/carrier.strength
+        log_odds = np.log(tackle_odds)
+        tackle_chance = np.exp(log_odds)/(1 + np.exp(log_odds))
+        
+        roll = np.random.random()
+        if roll < tackle_chance:
+            carrier.state=0
+            carrier.prone_counter=tackle_count
+            self.scatter_ball(scatter_amount)
+        else:
+            tackler.state=0
+            tackler.prone_counter=tackle_count
+    
+    def resolve_block(self,b1,b2):
+        # Magic numbers
+        both_down_chance=0.2
+        draw_diff=0.1
+        push_back_amount = 1
+        pi=4.*math.atan(1.)
+        block_count=5
+
+        b1_odds = b1.strength/b2.strength
+        log_odds = np.log(b1_odds)
+        b1_chance = np.exp(log_odds)/(1. + np.exp(log_odds))
+
+        # First determine if someone 'wins' and knocks down opponent.
+        # In case of a a draw in that regard, then assess push backs.
+        win_roll=np.random.random()
+        if abs(win_roll-b1_chance) < draw_diff:
+            # Draw on knock downs. See pushbacks
+            both_down_roll=np.random.random()
+            if both_down_roll < both_down_chance:
+                b1.state=0
+                b2.state=0
+                b1.prone_counter=block_count
+                b2.prone_counter=block_count
+            else:
+                if win_roll < b1_chance:
+                    b2.move_at_angle(b2.angle+pi,push_back_amount)
+                else:
+                    b1.move_at_angle(b1.angle+pi,push_back_amount)
+        else:
+            # Someone is going down
+            if win_roll < b1_chance:
+                b2.state=0
+                b2.prone_counter=block_count
+            else:
+                b1.state=0
+                b1.prone_counter=block_count
 
     def scatter_ball(self,amount):
         """
@@ -476,7 +334,8 @@ class Layout(object):
         self.yball = max(0,self.yball)
         self.xball = min(self.xsize,self.xball)
         self.yball = min(self.ysize,self.yball)
-        
+        self.ball_carrier=0
+
 class Trigger:
     """
     Defines triggers that could occur.
