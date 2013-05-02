@@ -3,23 +3,36 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import pylab
 import numpy as np
+import json
 
-class move_data(object):
-    " Struct for storing moves "
-    def __init__(self,pid,x,y,angle,have_ball,state):
-        self.pid=pid
-        self.x=x
-        self.y=y
-        self.angle=angle
-        self.have_ball=have_ball
-        self.state=state
+def make_move_dict(pid,x,y,angle,have_ball,state):
+    """
+    Utility function to make a small dictionary to store a single move.
+    """
+    return dict(zip(['pid','x','y','angle','have_ball','state'],[pid,x,y,angle,have_ball,state]))
+
+def make_player_dict(jersey,team,position):
+    """
+    Utility function for making player data as a small dict
+    """
+    return dict(zip(['jersey','team','position'],[jersey,team,position]))
+
+#class move_data(object):
+#    " Struct for storing moves "
+#    def __init__(self,pid,x,y,angle,have_ball,state):
+#        self.pid=pid
+#        self.x=x
+#        self.y=y
+#        self.angle=angle
+#        self.have_ball=have_ball
+#        self.state=state
         
-class player_data(object):
-    " Struct for storing player meta data for transfer."
-    def __init__(self,jersey,team,position):
-        self.jersey=jersey
-        self.team=team
-        self.position=position
+#class player_data(object):
+#    " Struct for storing player meta data for transfer."
+#    def __init__(self,jersey,team,position):
+#        self.jersey=jersey
+#        self.team=team
+#        self.position=position
 
 class Layout(object):
     """
@@ -62,54 +75,24 @@ class Layout(object):
         iframe=0
         while iframe < nticks:
             moves=self.moves[iframe]
-            #x=list()
-            #y=list()
-            #t=list()
-            #s=list()
-            #for elem in moves:
-            #    x.append(elem.x)
-            #    y.append(elem.y)
-            #    t.append(self.player_header[elem.pid].team)
-            #    s.append(elem.state)
             iframe = iframe + 1
-            #yield x,y,t
             yield moves
 
     def frame_display(self,frame_data):
-        #x,y,t = frame_data[0], frame_data[1], frame_data[2]
-        #hx = list()
-        #ax = list()
-        #ay = list()
-        #bx = list()
-        #by = list()
-        #for z in zip(x,y,t):
-        #    if z[2] == 1:
-        #        hx.append(z[0])
-        #        hy.append(z[1])
-        #    elif z[2] == -1:
-        #        ax.append(z[0])
-        #        ay.append(z[1])
-        #    else:
-        #        bx.append(z[0])
-        #        by.append(z[1])
-        #self.home_team_plot.set_data(hx,hy)
-        #self.away_team_plot.set_data(ax,ay)
-        #self.ball_plot.set_data(bx,by)
-        #return self.home_team_plot,self.away_team_plot,self.ball_plot
         for move, p in zip(frame_data,self.plots):
-            if move.state == 0:
+            if move['state'] == 0:
                 shape='v'
             else:
                 shape='o'
 
-            if self.player_header[move.pid].team == 1:
+            if self.player_header[move['pid']]['team'] == 1:
                 col='r'
-            elif self.player_header[move.pid].team == -1:
+            elif self.player_header[move['pid']]['team'] == -1:
                 col='b'
             else:
                 col='g'
                 shape='o'
-            p.set_data(move.x,move.y)
+            p.set_data(move['x'],move['y'])
             p.set_marker(shape)
             p.set_color(col)
             
@@ -119,14 +102,23 @@ class Layout(object):
         # Setup move storage
         self.player_header=dict()
         for p in self.players.values():
-            self.player_header[p.pid]=player_data(p.jersey,p.team,'null')
+            #self.player_header[p.pid]=player_data(p.jersey,p.team,'null')
+            self.player_header[p.pid]=make_player_dict(p.jersey,p.team,'null')
         # Add ball to player_header
-        self.player_header[0]=player_data(0,0,'null')
+        self.player_header[0]=make_player_dict(0,0,'null')#player_data(0,0,'null')
         # Add inits here? I.e. special player method to set initial objectives?
         for trig in self.triggers:
             trig.init()
+        # Run it
         for i in range(self.nsteps):
             self.tick()
+        # Dump to JSON
+        jfile = "/home/matt/smash/games/test_header.js"
+        with open(jfile,'w') as f:
+            f.write(json.dumps(self.player_header))
+        jfile = "/home/matt/smash/games/test.js"
+        with open(jfile,'w') as f:
+            f.write(json.dumps(self.moves))        
         # Display results
         fig1=plt.figure()
         plt.xlim([0,self.xsize])
@@ -141,7 +133,7 @@ class Layout(object):
             self.plots.append(plot_now)
         plot_now, =  plt.plot([],[],'go')
         self.plots.append(plot_now)
-        line_ani = animation.FuncAnimation(fig1,self.frame_display,self.frame_data,interval=15,blit=False,repeat=True)
+        line_ani = animation.FuncAnimation(fig1,self.frame_display,self.frame_data,interval=20,blit=False,repeat=True)
         plt.show()
 
     def tick(self):
@@ -168,11 +160,13 @@ class Layout(object):
         tick_moves=list()
         for p in self.players.values():
             have_ball = p.pid == self.ball_carrier
-            add_move=move_data(p.pid,p.x,p.y,p.angle,have_ball,p.state)
+            #add_move=move_data(p.pid,p.x,p.y,p.angle,have_ball,p.state)
+            add_move=make_move_dict(p.pid,p.x,p.y,p.angle,have_ball,p.state)
             tick_moves.append(add_move)
         # Ball position,use pid=0 for ball
         ball_carried = self.ball_carrier != 0
-        add_move=move_data(0,self.xball,self.yball,0,ball_carried,0)
+        #add_move=move_data(0,self.xball,self.yball,0,ball_carried,0)
+        add_move=make_move_dict(0,self.xball,self.yball,0,ball_carried,0)
         tick_moves.append(add_move)
         #
         self.moves.append(tick_moves)
@@ -222,7 +216,7 @@ class Layout(object):
         for c in self.collisions:
             if c[0].team == c[1].team:
                 # THIS IS TURNED OFF BY THE CONTINUE
-                #continue
+                continue
                 # Conserve momentum, but completely inelastic collision
                 px_before = c[0].current_speed * math.cos(c[0].angle) +\
                     c[1].current_speed* math.cos(c[1].angle)

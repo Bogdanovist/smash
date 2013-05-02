@@ -1,3 +1,7 @@
+import numpy as np
+import math
+import utils
+import scipy.optimize as opt
 
 class Player(object):
     """
@@ -19,6 +23,8 @@ class Player(object):
         self.jersey=jersey
         self.team=team
         self.angle=angle_of_motion
+        # Drag model?
+        self.cdrag = self.acc/self.top_speed**2
         #
         self.current_speed=0.
         self.x_objective=0.
@@ -92,7 +98,7 @@ class Player(object):
                         #if p.x > self.x : m *= -1
                         b = Py - m*Px
                         pb_eqs.append((p.pid,m,b,0))
-        #for e in pb_eqs: print("eqs",e)
+
         ang_start = np.floor(-max_angle_to_run)
         ang_end = np.ceil(max_angle_to_run)
         if self.team == -1:
@@ -187,8 +193,6 @@ class Player(object):
         """
         Move method for each tick update.
         """
-        # This uses some geometry from the notebook that I am not yet
-        # convinced about...
         # We are ignoring \delta_t by calling it unity, so V and A need to be in appropriate
         # units to reflect that.
 
@@ -196,23 +200,24 @@ class Player(object):
         if self.state == 0:
             return
 
-        pi=4.*math.atan(1.)
-        vx=self.current_speed*math.cos(self.angle)
-        vy=self.current_speed*math.sin(self.angle)
-        acc_angle=math.atan2(self.y + vy - self.y_objective,self.x + vx - self.x_objective)
-        # ???
-        acc_angle += pi
+        # Use Brent method to find best angle to accelerate at to reach objective.
+        pi = 4.*math.atan(1.)
+        # Bracket angle to be at least in hemisphere of objective
+        try:
+            obj_angle = np.tan((self.y_objective-self.y)/(self.x_objective-self.x))
+            if self.x_objective-self.x < 0:
+                obj_angle += pi
+        except:
+            # div by zero?
+            obj_angle = 0.
+        try:
+            best_acc = opt.brent(lambda angle : self.eval_move(angle + obj_angle), brack=(-pi/2,0.,pi/2))
+        except:
+            best_acc = obj_angle
+        acc_angle = best_acc+obj_angle
 
-        # Update velocity, ensuring we stay below speed limit
-        vx_new = vx + self.acc*math.cos(acc_angle)
-        vy_new = vy + self.acc*math.sin(acc_angle)
-        self.angle = math.atan2(vy_new,vx_new)
-        self.current_speed = min(np.sqrt( vx_new**2 + vy_new**2),self.top_speed)
-        
-        # Update position
-        self.x += vx_new
-        self.y += vy_new
-        
+        self.x, self.y, self.angle, self.current_speed = self.project_move(acc_angle)
+ 
         # Check if we can make it to objective
         #if np.sqrt((self.x_objective-self.x)**2 + (self.y_objective-self.y)**2) < self.speed:
         #    self.x = self.x_objective
@@ -233,6 +238,35 @@ class Player(object):
         self.y = min(self.y,self.layout.ysize)
         self.y = max(self.y,0)
 
+    def eval_move(self,acc_angle):
+        """
+        Utility function for acc angle optimisation.
+        Returns distance between projected position given the angle and the objective.
+        """
+        x,y,a,b=self.project_move(acc_angle)
+        return np.sqrt( (x-self.x_objective)**2 + (y-self.y_objective)**2)
+
+
+    def project_move(self,acc_angle):
+        """
+        Projects player one tick by applying max acceleration at the given angle.
+        
+        Returns
+        -------
+        Tuple of the projected phase (x,y, angle, speed) 
+        """
+        vx, vy = utils.components(self.current_speed,self.angle)
+        ax, ay =  utils.components(self.acc,acc_angle)
+        vx_new, vy_new = (vx + ax,vy + ay)
+
+        angle_new = math.atan2(vy_new,vx_new)
+        speed_new = min(np.sqrt( vx_new**2 + vy_new**2),self.top_speed)
+        
+        # Speed limited components
+        vx_new, vy_new = utils.components(speed_new,angle_new)
+
+        return  (self.x + vx_new, self.y + vy_new, angle_new, speed_new)
+    
     def move_at_angle(self,angle,amount):
         """
         Utililty method used by some collision resolutions. Just geometry.

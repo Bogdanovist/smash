@@ -4,8 +4,9 @@ Defines player positional behavoiour
 Experimentally a total game setup??
 """
 import tools
+import player
 
-class Runner(tools.Player):
+class Runner(player.Player):
     """
     In defence goes for loose ball or carrier. In offense runs to end zone.
     ??? In offence without the ball???
@@ -16,7 +17,7 @@ class Runner(tools.Player):
         top_speed=0.5
         acc=0.2
         strength=0.6
-        tools.Player.__init__(self,layout,size,x,y,top_speed,acc,strength,jersey,team)
+        player.Player.__init__(self,layout,size,x,y,top_speed,acc,strength,jersey,team)
 
     def set_ai_config(self):
         self.ai_config=list()
@@ -40,7 +41,7 @@ class Runner(tools.Player):
             # opponent has ball
             self.objective = self.tackle_ball_carrier
 
-class Bruiser(tools.Player):
+class Bruiser(player.Player):
     """
     Simply tries to knock down nearest opponent.
     """
@@ -50,7 +51,7 @@ class Bruiser(tools.Player):
         top_speed=0.4
         acc=0.15
         strength=1.
-        tools.Player.__init__(self,layout,size,x,y,top_speed,acc,strength,jersey,team)
+        player.Player.__init__(self,layout,size,x,y,top_speed,acc,strength,jersey,team)
 
     def set_ai_config(self):
         self.ai_config=list()
