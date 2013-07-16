@@ -15,7 +15,7 @@ class Runner(player.Player):
         # Class default stats
         size=1.
         top_speed=0.5
-        acc=0.2
+        acc=0.1
         strength=0.6
         player.Player.__init__(self,layout,size,x,y,top_speed,acc,strength,jersey,team)
 
@@ -70,3 +70,39 @@ class Bruiser(player.Player):
             self.objective=self.run_to_goal
         else:
             self.objective=self.go_psycho
+
+class Catcher(player.Player):
+    """
+    Basic test position for someone trying to get into a good spot to recieve
+    a pass. For now, in defence just tries to kill the dill.
+    """
+    def __init__(self,layout,x,y,jersey,team):
+        # Class default stats
+        size=1.
+        top_speed=0.6
+        acc=0.15
+        strength=0.4
+        player.Player.__init__(self,layout,size,x,y,top_speed,acc,strength,jersey,team)
+
+    def set_ai_config(self):
+        self.ai_config=list()
+        self.ai_config.append((tools.BallLoose,self.ball_loose))
+        self.ai_config.append((tools.BallHeld,self.ball_held))   
+
+    def ball_loose(self):
+        " Get the ball "
+        # Use base class method.
+        self.objective=self.get_loose_ball
+    
+    def ball_held(self):
+        " What to do when the ball is held by some player "
+        carrier = self.layout.players[self.layout.ball_carrier]
+        if self.pid == carrier.pid:
+            # I have the ball!
+            self.objective=self.run_to_goal
+        elif self.team == carrier.team:
+            # team mate has ball
+            self.objective = self.find_space
+        else:
+            # opponent has ball
+            self.objective = self.tackle_ball_carrier     

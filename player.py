@@ -2,6 +2,9 @@ import numpy as np
 import math
 import utils
 import scipy.optimize as opt
+from const import *
+import matplotlib.pyplot as plt
+import pylab
 
 class Player(object):
     """
@@ -52,6 +55,17 @@ class Player(object):
     def objective(self):
         pass
 
+    def objective_sanity(self):
+        """
+        To be called after objective setting to ensure sensible.
+        """
+        sideline_buffer=1.
+        endzone_buffer=-1.
+        self.x_objective = max(self.x_objective,endzone_buffer)
+        self.x_objective = min(self.x_objective,self.layout.xsize-endzone_buffer)
+        self.y_objective = max(self.y_objective,sideline_buffer)  
+        self.y_objective = min(self.y_objective,self.layout.ysize-sideline_buffer)
+
     def set_objective(self,blah):
         self.objective=blah
 
@@ -67,69 +81,66 @@ class Player(object):
         Run towards offensive end zone, avoiding opponents.
         """
         # This could be replaced by angle to end zone corner?
-        max_angle_to_run = 45.
+        max_angle_to_run = 80.
         angle_step=5
-        pi=4.*math.atan(1.)
-        deg2rad=pi/180.
 
         # Set defaults in case there are no obstacles in our path.
         # NOTE: This is sub-optimal in the case that any defenders behind
         # us can run faster than us.
-
         best_y = self.y
         if self.team == 1:
             best_x = self.layout.xsize
         else:
             best_x = 0
 
-        # Find equations of the p.b. of all goalward opponents
-        pb_eqs=list()
-        for p in self.layout.players.values():
-            if self.team != p.team:
-                if self.dist_to_goal() > p.dist_to_their_goal():
-                    # Maths!
-                    Px,Py = (self.x+p.x)/2. , (self.y+p.y)/2.
-                    if self.y == p.y:
-                        # m would be infinite, describe eq differently
-                        # and denote by eq[3]=-1
-                        pb_eqs.append((p.pid,Px,0,-1))
-                    else:
-                        m=-1./( (self.y-p.y)/(self.x-p.x))
-                        #if p.x > self.x : m *= -1
-                        b = Py - m*Px
-                        pb_eqs.append((p.pid,m,b,0))
-
         ang_start = np.floor(-max_angle_to_run)
         ang_end = np.ceil(max_angle_to_run)
         if self.team == -1:
             ang_start += 180
-            ang_end += 180
-        greatest_gain=0.
-        for ang in np.arange(ang_start,ang_end,angle_step):
+            ang_end += 180      
+        
+        def distAlongAngle(ang,obj,full_return=False):
+            " Finds shortest dist along this angle"
             # find eq of line from me at angle
             m=math.tan(ang*deg2rad)
-            b=self.y - m*self.x
+            b=obj.y - m*obj.x
             # Find shortest intersection distance
             shortest_dist=-1
             for eq in pb_eqs:
                 if eq[2] == -1:
-                    dist=abs(self.x-eq[1])
+                    # Case where y co-ords are equal.
+                    dist=abs(obj.x-eq[1])
+                    yi=obj.y
+                    xi=eq[1]
                 else:
+                    # Find co-ords of intersection point
                     xi=(b-eq[2])/(eq[1]-m)
                     yi=m*xi+b
-                    dist=np.sqrt( (self.x-xi)**2 + (self.y-yi)**2)
-               # print("test ",ang,m,b,dist,np.floor(xi),np.floor(yi))
+                    # Checks for intersection being out of bounds
+                    if (yi > obj.layout.ysize):
+                        # Pull back intersection point to OOB position
+                        yi = obj.layout.ysize
+                        xi = (yi-b)/m
+                    elif (yi < 0):
+                        yi = 0
+                        xi = (yi-b)/m
+                    # Ensure intersection points are in the field
+                    xi = utils.bracket(0,xi,obj.layout.xsize)
+                    #dist=np.sqrt( (x-xi)**2 + (y-yi)**2)
+                    dist=xi-obj.x
                 if dist < shortest_dist or shortest_dist < 0.:
                     shortest_dist=dist
-                    shortest_x=xi
-                    shortest_y=yi
-           # print("check",shortest_dist,greatest_gain,pb_eqs)
-            if shortest_dist > greatest_gain:
-                greatest_gain = shortest_dist
-                best_x=shortest_x
-                best_y=shortest_y
-               # print("gain",best_x,best_y,shortest_dist,greatest_gain)
-        #print("clever",greatest_gain,best_x,best_y)
+                    xs=xi
+                    ys=yi
+            if full_return:
+                return (shortest_dist,xs,ys)
+            return -shortest_dist
+
+        pb_eqs = self.layout.helpers['pb_eqs'].pb_eqs
+        if len(pb_eqs) != 0: 
+            best_angle = opt.fminbound(distAlongAngle,ang_start,ang_end,args=(self,))
+            dist, best_x, best_y = distAlongAngle(best_angle,self,full_return=True)
+
         self.x_objective = best_x
         self.y_objective = best_y
         # Ensure we don't try to run out
@@ -151,7 +162,7 @@ class Player(object):
         else:
             # Run to point D in front of ball carrier, where D is the distance
             # between self and the carrier.
-            self.x_objective = dill.x + self.dist_to_other(dill)*(-self.team)
+            self.x_objective = dill.x + self.dist_to_other(dill)*(-self.team)*0.9
             self.y_objective = dill.y
         self.want_to_block=False
 
@@ -182,12 +193,82 @@ class Player(object):
     def protect_ball_carrier(self):
         """
         Get between ball carrier and opponents.
+        NOT FINISHED (hardly started)
         """
         carrier=self.layout.players[self.layout.ball_carrier]
         
         # Who to block? We could try and block nearest baddy to us, but they might not be
         # a threat to the carrier. We could try to block the one nearest the carrier, but
         # there might be one closer to us we could better block??
+
+    def find_space(self):
+        """
+        Get in a good position for recieving a pass
+        """
+        # Good positions are a trade off between the following:
+        # * Distance to ball carrier (length of pass)
+        # * Distance to end zone
+        # * Distance to defenders (consider their motion?)
+        # * Distance to other recievers (don't crowd the gaps)
+        #
+        # There are many different kernels (gaussian, parabola,...) that could be used for
+        # these as well as tuneable parameters to those kernels. Implement something then
+        # worry later about fine tuning the details.
+        
+        bc=self.layout.players[self.layout.ball_carrier]
+
+        # make list of defenders
+        defenders=list()
+        for p in self.layout.players.values():
+            if p.team != bc.team:
+                defenders.append(p)
+
+        # make list of recievers
+        # For now, all friends are receivers.
+        receivers=list()
+        for p in self.layout.players.values():
+            if p.team == bc.team:
+                receivers.append(p)        
+        
+        # Here are some kernels.
+        # parabolic with weight for now
+        # Ensure the sign is such that "small is good spot to be"
+        # in other words can interpret as a "hazard map"
+        def end_zone_kern(x,y,w=1):#,d=False):
+            #if d:
+            #    return -2*w*bc.dist_to_goal(x=x)*bc.team , 0
+            #else:
+            return w*bc.dist_to_goal(x=x)**2
+
+        def pass_dist_kern(x,y,w=1):
+            dsq=(bc.x-x)**2 + (bc.y-y)**2
+            return w*dsq
+        
+        def def_dist_kern(x,y,w=1):
+            # Find all the distances
+            dlist=list()
+            for p in defenders:
+                dlist.append(np.sqrt((x-p.x)**2 + (y-p.y)**2))
+            return -min(dlist)
+
+        def rec_dist_kern(x,y,w=1):
+            # Find all the distances
+            rlist=list()
+            for p in receivers:
+                rlist.append(np.sqrt((x-p.x)**2 + (y-p.y)**2))
+            return -min(rlist)
+
+        # Pull all the kernels together including a weight vector
+        def rec_hazard(xy,w=(1,1,1,1)):
+            x=xy[0]
+            y=xy[1]
+            return end_zone_kern(x,y,w[0]) + pass_dist_kern(x,y,w[1]) + def_dist_kern(x,y,w[2]) +\
+                rec_dist_kern(x,y,w[3])
+        
+        # Minimise to find best spot to head towards
+        best_xy = opt.fmin(rec_hazard, np.array( (bc.x,bc.y) ), disp=False)
+        self.x_objective = best_xy[0]
+        self.y_objective = best_xy[1]
 
     def move(self):
         """
@@ -200,21 +281,29 @@ class Player(object):
         if self.state == 0:
             return
 
+        # Don't move if we are at objective
+        # NOTE: WHAT ABOUT SPEED?
+        if np.sqrt((self.y_objective-self.y)**2 + (self.x_objective-self.x)**2) == 0.:
+            return
+
         # Use Brent method to find best angle to accelerate at to reach objective.
         pi = 4.*math.atan(1.)
         # Bracket angle to be at least in hemisphere of objective
         try:
             obj_angle = np.tan((self.y_objective-self.y)/(self.x_objective-self.x))
+            if not np.isfinite(obj_angle):
+                print("non finite",self.y_objective,self.y,self.x_objective,self.x)
             if self.x_objective-self.x < 0:
                 obj_angle += pi
         except:
             # div by zero?
+            print("exc in move",self.y_objective,self.y,self.x_objective,self.x)
             obj_angle = 0.
         try:
-            best_acc = opt.brent(lambda angle : self.eval_move(angle + obj_angle), brack=(-pi/2,0.,pi/2))
+            best_acc = opt.brent(lambda angle : self.eval_move(angle), brack=(-pi,pi))
         except:
             best_acc = obj_angle
-        acc_angle = best_acc+obj_angle
+        acc_angle = best_acc
 
         self.x, self.y, self.angle, self.current_speed = self.project_move(acc_angle)
  
@@ -266,6 +355,27 @@ class Player(object):
         vx_new, vy_new = utils.components(speed_new,angle_new)
 
         return  (self.x + vx_new, self.y + vy_new, angle_new, speed_new)
+
+    def unproject_move(self,acc_angle):
+        """
+        Reverses the effect of a projection at the specified angle.
+        
+        Returns
+        -------
+        Tuple of the projected phase (x,y, angle, speed) 
+        """
+        hpi = 2*math.atan(1.)
+        vx, vy = utils.components(self.current_speed,self.angle+hpi)
+        ax, ay =  utils.components(self.acc,acc_angle+hpi)
+        vx_new, vy_new = (vx + ax,vy + ay)
+
+        angle_new = math.atan2(vy_new,vx_new)
+        speed_new = min(np.sqrt( vx_new**2 + vy_new**2),self.top_speed)
+        
+        # Speed limited components
+        vx_new, vy_new = utils.components(speed_new,angle_new)
+
+        return  (self.x + vx_new, self.y + vy_new, angle_new, speed_new)
     
     def move_at_angle(self,angle,amount):
         """
@@ -274,14 +384,18 @@ class Player(object):
         self.x += amount * math.cos(angle)
         self.y += amount * math.sin(angle)
     
-    def dist_to_goal(self):
+    def dist_to_goal(self,x=None):
         """
         Returns shortest distance to offensive end zone.
         """
-        if self.team == 1:
-            return self.layout.xsize - self.x
+        if x == None:
+            xuse = self.x
         else:
-            return self.x
+            xuse = x     
+        if self.team == 1:
+            return self.layout.xsize - xuse
+        else:
+            return xuse
 
     def dist_to_their_goal(self):
         """

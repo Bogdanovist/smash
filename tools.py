@@ -4,6 +4,9 @@ import matplotlib.animation as animation
 import pylab
 import numpy as np
 import json
+import helpers
+import itertools
+import utils
 
 def make_move_dict(pid,x,y,angle,have_ball,state):
     """
@@ -16,23 +19,6 @@ def make_player_dict(jersey,team,position):
     Utility function for making player data as a small dict
     """
     return dict(zip(['jersey','team','position'],[jersey,team,position]))
-
-#class move_data(object):
-#    " Struct for storing moves "
-#    def __init__(self,pid,x,y,angle,have_ball,state):
-#        self.pid=pid
-#        self.x=x
-#        self.y=y
-#        self.angle=angle
-#        self.have_ball=have_ball
-#        self.state=state
-        
-#class player_data(object):
-#    " Struct for storing player meta data for transfer."
-#    def __init__(self,jersey,team,position):
-#        self.jersey=jersey
-#        self.team=team
-#        self.position=position
 
 class Layout(object):
     """
@@ -54,6 +40,10 @@ class Layout(object):
         self.istep=0
         # Store list of all triggers in use here, in order to loop over in one place.
         self.triggers = list()
+        # Init list of helpers
+        self.helpers = dict()
+        self.helpers['pb_eqs']=helpers.BallCarrierPBeqs(self)
+        #self.helpers['maps']=helpers.HazardMaps(self)
 
     def add_player(self,player):
         """
@@ -112,6 +102,8 @@ class Layout(object):
         # Run it
         for i in range(self.nsteps):
             self.tick()
+            if self.check_scoring():
+                break
         # Dump to JSON
         jfile = "/home/matt/smash/games/test_header.js"
         with open(jfile,'w') as f:
@@ -143,9 +135,15 @@ class Layout(object):
         # Stand prone players up
         for p in self.players.values():
             p.standup()
+        # update helpers
+        for h in self.helpers.values():
+            h.update()
         # Run current objective functions for all players.
         for p in self.players.values():
             p.objective()
+            p.objective_sanity()
+        # Ensure players on the same team are not attempting to run into each other
+        self.prevent_friendly_collisions()
         # Move all players
         for p in self.players.values():
             p.move()
@@ -172,6 +170,19 @@ class Layout(object):
         self.moves.append(tick_moves)
         self.istep += 1
 
+    def check_scoring(self):
+        """
+        Has a team scored?
+        """
+        end_zone_size=2.
+        if self.ball_carrier == 0:
+            return False
+        else:
+            if self.xball < end_zone_size or self.xball > (self.xsize - end_zone_size):
+                return True
+            else:
+                return False
+
     def check_ball(self):
         """
         Collision detection with the ball. Move ball.
@@ -187,6 +198,48 @@ class Layout(object):
             self.xball = p.x
             self.yball = p.y
 
+    def prevent_friendly_collisions(self):
+        """
+        Ensure objective locations of same team players are spaced.
+        """
+        # Change objectives to pointing just in front of player, rather than
+        # potentially a long way away.
+        for p in self.players.values():
+            angle = math.atan2(p.y_objective-p.y,p.x_objective-p.x)
+            xadd, yadd = utils.components(p.top_speed,angle)
+            p.x_objective = p.x + xadd
+            p.y_objective = p.y + yadd
+        for thisP, thatP in itertools.combinations(self.players.values(), 2):
+            if thisP.state == 0 or thatP.state == 0:
+                continue # Prone players don't count
+            elif thisP.team != thatP.team:
+                continue # Different teams, probably WANT to collide...
+            else:
+                dist = np.sqrt( (thisP.x_objective-thatP.x_objective)**2 +\
+                                    (thisP.y_objective-thatP.y_objective)**2 )\
+                                    - thisP.size - thatP.size
+                if dist < 0:
+                    # We need to adjust the objectives.
+                    # Find mid-point of current positions
+                    cx = (thisP.x + thatP.x)/2.
+                    cy = (thisP.y + thatP.y)/2.
+                    # Find mid-point of objectives
+                    ox = (thisP.x_objective + thatP.x_objective)/2.
+                    oy = (thisP.y_objective + thatP.y_objective)/2.
+                    # Find angle of line between two objectives.
+                    hpi=2*math.atan(1.)
+                    angle = math.atan2(cy-oy,cx-ox)
+                    # Find angle of p.b. of this line
+                    pb_angle = -1/angle
+                    # Project along the p.b. line enough to seperate the two objectives
+                    pdist = -dist/2.
+                    thisx_delta, thisy_delta =  utils.components(pdist,pb_angle)
+                    thatx_delta, thaty_delta =  utils.components(pdist,pb_angle+hpi)
+                    thisP.x_objective += thisx_delta
+                    thisP.y_objective += thisy_delta
+                    thatP.x_objective += thatx_delta
+                    thatP.y_objective += thaty_delta
+                        
     def detect_collisions(self):
         """
         Detect any collisions between objects and store a list of any.
@@ -195,7 +248,8 @@ class Layout(object):
         self.collisions=list()
         for thisP in self.players.values():
             for thatP in self.players.values():
-                if thisP.pid == thatP.pid:
+                # Ensure we don't double count collisions (i.e. by exchange of this and that)
+                if thisP.pid >= thatP.pid:
                     continue
                 elif thisP.state == 0 or thatP.state == 0:
                     # Prone players can be run over
@@ -215,9 +269,12 @@ class Layout(object):
         # Very simple (and unphysical) implementations for now.
         for c in self.collisions:
             if c[0].team == c[1].team:
-                # THIS IS TURNED OFF BY THE CONTINUE
-                continue
                 # Conserve momentum, but completely inelastic collision
+                continue
+                # Set back to pre collision positions
+                c[0].x, c[0].y, c[0].angle, c[0].current_speed = c[0].unproject_move(c[0].angle)
+                c[1].x, c[1].y, c[1].angle, c[1].current_speed = c[1].unproject_move(c[1].angle)
+
                 px_before = c[0].current_speed * math.cos(c[0].angle) +\
                     c[1].current_speed* math.cos(c[1].angle)
                 py_before = c[0].current_speed * math.sin(c[0].angle) +\
@@ -226,17 +283,17 @@ class Layout(object):
                 pa_before = math.atan2(py_before,px_before)
                 xb,yb = (c[0].x+c[1].x)/2., (c[0].y + c[1].y)/2.
                 # Assume equal 'mass' so divide momentum by 2
-                xa,ya = xb - px_before * math.cos(pa_before/2.), yb - py_before * math.sin(pa_before/2.)
+                xa,ya = xb + px_before * math.cos(pa_before)/2., yb + py_before * math.sin(pa_before)/2.
                 c[0].current_speed = p_before/2.
                 c[1].current_speed = p_before/2.
                 c[0].angle = pa_before
                 c[1].angle = pa_before
                 # Offset from center of mass
                 ang = math.atan2( c[1].y-c[0].y, c[1].x-c[0].x)
-                c[0].x = xa + c[0].size*math.cos(ang)*1.1
-                c[1].x = xa - c[1].size*math.cos(ang)*1.1
-                c[0].y = ya + c[0].size*math.sin(ang)*1.1
-                c[1].y = ya - c[1].size*math.sin(ang)*1.1                              
+                c[0].x = xa + c[0].size*math.cos(ang)*1.
+                c[1].x = xa - c[1].size*math.cos(ang)*1.
+                c[0].y = ya + c[0].size*math.sin(ang)*1.
+                c[1].y = ya - c[1].size*math.sin(ang)*1.                              
                 # Same team, move out of the way
                 #if c[0].x > c[1].x:
                 #    c[0].x += c[0].size
@@ -283,8 +340,8 @@ class Layout(object):
     
     def resolve_block(self,b1,b2):
         # Magic numbers
-        both_down_chance=0.2
-        draw_diff=0.1
+        both_down_chance=0.02
+        draw_diff=0.5
         push_back_amount = 1
         pi=4.*math.atan(1.)
         block_count=5
@@ -296,6 +353,7 @@ class Layout(object):
         # First determine if someone 'wins' and knocks down opponent.
         # In case of a a draw in that regard, then assess push backs.
         win_roll=np.random.random()
+
         if abs(win_roll-b1_chance) < draw_diff:
             # Draw on knock downs. See pushbacks
             both_down_roll=np.random.random()
