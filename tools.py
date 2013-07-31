@@ -20,20 +20,89 @@ def make_player_dict(jersey,team,position):
     """
     return dict(zip(['jersey','team','position'],[jersey,team,position]))
 
+class Ball(object):
+    """
+    Ball object.
+
+    In all functions, 'power' means initial launch velocity.
+
+    TODO: Not real mechanics yet, just aristotelean.
+    """
+    g=10 #ms^-2
+    def __init__(self,layout,x,y):
+        self.layout=layout
+        self.x=float(x)
+        self.y=float(y)
+        self.z=0
+        self.held = False
+        self.flying = False
+        self.carrier = 0
+    
+    def move(self):
+        """
+        Collision detection with the ball. Move ball.
+        
+        TODO: Implement catching properly, at the moment anyone will catch if the ball is nearby,
+        regardless of z.
+        """
+        if self.flying == True:
+            addx, addy = utils.components(self.speed,self.angle)
+            self.x += addx
+            self.y += addy
+            
+        if self.carrier==0:
+            for p in self.layout.players.values():
+                dist = np.sqrt( (p.x - self.x)**2 + (p.y - self.y)**2)
+                if dist < p.size:
+                    self.carrier = p.pid        
+        else:
+            # Move ball with ball carrier
+            p = self.layout.players[self.ball.carrier]
+            self.x = p.x
+            self.y = p.y
+
+
+    def launch(self,elv,power,target_x,target_y):
+        """
+        Initialise throw with given angle and power from current ball position.
+
+        TODO: Newtonian mechanics!
+        """
+        self.z=20. # Too high for anyone to block
+        self.angle = math.atan2(target_y-self.t,target_x-self.x)
+        self.speed = power
+        self.flying = True
+
+    def find_launch_angle(self,power,x_target,y_target):
+        """
+        Returns the angle to launch at for a throw with a given power to a given target location. 
+        NOTE: NOT COMPLETE
+        """
+        d = np.sqrt( (self.x-x_target)**2 + (self.y-y_target)**2)
+        return math.asin(d * self.g / power**2)/2.
+        
+
+    def scatter(self,amount):
+        """
+        Scatters the ball by up to amount in a random direction.
+        """
+        self.x += np.random.random()*amount-amount/2.
+        self.y += np.random.random()*amount-amount/2.
+        self.x = utils.bracket(0,self.x,self.layout.xsize)
+        self.y = utils.bracket(0,self.y,self.layout.ysize)
+
 class Layout(object):
     """
     Base(?) class for the backdrop in which stuff happens.
     """
-    def __init__(self,xsize,ysize,nsteps):
+    def __init__(self,xsize,ysize,nsteps,dt=0.1):
         self.xsize=float(xsize)
-        self.ysize=float(ysize)
-        self.xball=self.xsize/2
-        self.yball=self.ysize/2
+        self.ysize=float(ysize)       
+        self.ball=Ball(self,self.xsize/2.,self.ysize/2.)
         self.players=dict()
         self.collisions=list()
         self.nsteps=nsteps
-        # 0 for no-one, PID for any other.
-        self.ball_carrier=0
+        self.dt=dt
         # Save all moves
         self.moves=list()
         # Store step number
@@ -43,6 +112,7 @@ class Layout(object):
         # Init list of helpers
         self.helpers = dict()
         self.helpers['pb_eqs']=helpers.BallCarrierPBeqs(self)
+        self.helpers['maps']=helpers.Maps(self)
         #self.helpers['maps']=helpers.HazardMaps(self)
 
     def add_player(self,player):
@@ -149,7 +219,7 @@ class Layout(object):
             p.move()
         self.detect_collisions()
         self.resolve_collisions()
-        self.check_ball()
+        self.ball.move()
         # Run triggers
         for trig in self.triggers:
             trig.check()
@@ -157,14 +227,13 @@ class Layout(object):
         # Somewhat dodgy, but this will need to be dumped to a DB soon anyway.
         tick_moves=list()
         for p in self.players.values():
-            have_ball = p.pid == self.ball_carrier
+            have_ball = p.pid == self.ball.carrier
             #add_move=move_data(p.pid,p.x,p.y,p.angle,have_ball,p.state)
             add_move=make_move_dict(p.pid,p.x,p.y,p.angle,have_ball,p.state)
             tick_moves.append(add_move)
         # Ball position,use pid=0 for ball
-        ball_carried = self.ball_carrier != 0
-        #add_move=move_data(0,self.xball,self.yball,0,ball_carried,0)
-        add_move=make_move_dict(0,self.xball,self.yball,0,ball_carried,0)
+        ball_carried = self.ball.carrier != 0
+        add_move=make_move_dict(0,self.ball.x,self.ball.y,0,ball_carried,0)
         tick_moves.append(add_move)
         #
         self.moves.append(tick_moves)
@@ -175,28 +244,13 @@ class Layout(object):
         Has a team scored?
         """
         end_zone_size=2.
-        if self.ball_carrier == 0:
+        if self.ball.carrier == 0:
             return False
         else:
-            if self.xball < end_zone_size or self.xball > (self.xsize - end_zone_size):
+            if self.ball.x < end_zone_size or self.ball.x > (self.xsize - end_zone_size):
                 return True
             else:
                 return False
-
-    def check_ball(self):
-        """
-        Collision detection with the ball. Move ball.
-        """
-        if self.ball_carrier==0:
-            for p in self.players.values():
-                dist = np.sqrt( (p.x - self.xball)**2 + (p.y - self.yball)**2)
-                if dist < p.size:
-                    self.ball_carrier = p.pid        
-        else:
-            # Move ball with ball carrier
-            p = self.players[self.ball_carrier]
-            self.xball = p.x
-            self.yball = p.y
 
     def prevent_friendly_collisions(self):
         """
@@ -206,7 +260,7 @@ class Layout(object):
         # potentially a long way away.
         for p in self.players.values():
             angle = math.atan2(p.y_objective-p.y,p.x_objective-p.x)
-            xadd, yadd = utils.components(p.top_speed,angle)
+            xadd, yadd = utils.components(p.top_speed*self.dt,angle)
             p.x_objective = p.x + xadd
             p.y_objective = p.y + yadd
         for thisP, thatP in itertools.combinations(self.players.values(), 2):
@@ -333,7 +387,8 @@ class Layout(object):
         if roll < tackle_chance:
             carrier.state=0
             carrier.prone_counter=tackle_count
-            self.scatter_ball(scatter_amount)
+            self.ball.scatter(scatter_amount)
+            self.ball.carrier=0
         else:
             tackler.state=0
             tackler.prone_counter=tackle_count
@@ -375,18 +430,6 @@ class Layout(object):
             else:
                 b1.state=0
                 b1.prone_counter=block_count
-
-    def scatter_ball(self,amount):
-        """
-        Scatters the ball by up to amount in a random direction.
-        """
-        self.xball += np.random.random()*amount-amount/2.
-        self.yball += np.random.random()*amount-amount/2.
-        self.xball = max(0,self.xball)
-        self.yball = max(0,self.yball)
-        self.xball = min(self.xsize,self.xball)
-        self.yball = min(self.ysize,self.yball)
-        self.ball_carrier=0
 
 class Trigger:
     """
@@ -433,7 +476,7 @@ class BallLoose(Trigger):
         if self.prev: self.broadcast()
 
     def condition(self):
-        if self.layout.ball_carrier ==0:
+        if self.layout.ball.carrier ==0:
             return True
         else:
             return False
@@ -455,7 +498,7 @@ class BallHeld(BallLoose):
     """
     # simply reverse the BallLoose condition
     def condition(self):
-        if self.layout.ball_carrier ==0:
+        if self.layout.ball.carrier ==0:
             return False
         else:
             return True

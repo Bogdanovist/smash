@@ -28,12 +28,12 @@ class BallCarrierPBeqs(Helper):
         """
         Find equations of the p.b. of all goalward opponents
         """
-        if self.layout.ball_carrier == 0:
+        if self.layout.ball.carrier == 0:
             self.pb_eqs=list()
             return
     
         self.pb_eqs=list()
-        bc=self.layout.players[self.layout.ball_carrier]
+        bc=self.layout.players[self.layout.ball.carrier]
         for p in self.layout.players.values():
             if bc.team != p.team:
                 if bc.dist_to_goal() > p.dist_to_their_goal():
@@ -51,6 +51,90 @@ class BallCarrierPBeqs(Helper):
         # Now find projected 'strike point' of BC with opponents
         # TODO
 
+class Maps(Helper):
+
+    def __init__(self,layout):
+        Helper.__init__(self,layout)    
+
+        # Good positions are a trade off between the following:
+        # * Distance to ball carrier (length of pass)
+        # * Distance to end zone
+        # * Distance to defenders (consider their motion?)
+        # * Distance to other recievers (don't crowd the gaps)
+        #
+        # There are many different kernels (gaussian, parabola,...) that could be used for
+        # these as well as tuneable parameters to those kernels. Implement something then
+        # worry later about fine tuning the details.
+
+    def update(self):
+
+        if self.layout.ball.carrier == 0:
+            return
+
+        self.bc=self.layout.players[self.layout.ball.carrier]
+
+        # make list of defenders
+        self.defenders=list()
+        for p in self.layout.players.values():
+            if p.team != self.bc.team:
+                self.defenders.append(p)
+
+        # make list of recievers
+        # For now, all bc friends are receivers.
+        self.receivers=list()
+        for p in self.layout.players.values():
+            if p.team == self.bc.team:
+                self.receivers.append(p)        
+        
+    # Here are some kernels.
+    # parabolic with weight for now
+    # Ensure the sign is such that "small is good spot for receiver to be"
+    # in other words can interpret as a "hazard map for receiver"
+    def end_zone_kern(self,p,x,y,w=1):
+        return w*p.dist_to_goal(x=x)**2
+
+    def pass_dist_kern(self,x,y,w=1):
+        dsq=(self.bc.x-x)**2 + (self.bc.y-y)**2
+        return w*dsq
+    
+    def def_dist_kern(self,thisPlayer,x,y,w=1):
+        " Uses minimimum distance only, no weighting for number of defenders "
+        # Find all the distances
+        dlist=list()
+        for p in self.defenders:
+            if p.pid == thisPlayer.pid:
+                continue
+            dlist.append(np.sqrt((x-p.x)**2 + (y-p.y)**2))
+        return -min(dlist)
+
+    def rec_dist_kern(self,thisPlayer,x,y,w=1):
+        # Find all the distances
+        rlist=list()
+        for p in self.receivers:
+            if p.pid == thisPlayer.pid:
+                continue
+            rlist.append(np.sqrt((x-p.x)**2 + (y-p.y)**2))
+        return -min(rlist)
+
+    # Pull all the kernels together including a weight vector
+    def hazard(self,xy,p,w=(0.01,0.1,1,1),debug=False):
+        x=xy[0]
+        y=xy[1]
+        if debug:
+            print(self.end_zone_kern(p,x,y,w[0]),self.pass_dist_kern(x,y,w[1]),self.def_dist_kern(p,x,y,w[2]),\
+                      self.rec_dist_kern(p,x,y,w[3]))
+        return self.end_zone_kern(p,x,y,w[0]) + self.pass_dist_kern(x,y,w[1]) + self.def_dist_kern(p,x,y,w[2]) +\
+            self.rec_dist_kern(p,x,y,w[3])
+        
+        # Minimise to find best spot to head towards
+        #best_xy = opt.fmin(rec_hazard, np.array( (bc.x,bc.y) ), disp=False)
+        #self.x_objective = best_xy[0]
+        #self.y_objective = best_xy[1]
+
+    
+
+
+# This is the early, experimental and slow(!) approach.
 class HazardMaps(Helper):
     """
     Computes are stores hazard maps for use by catchers and possibly also
@@ -71,9 +155,9 @@ class HazardMaps(Helper):
         # continous functions that can be minimised may be better. For now, maps
         # make visualisation for debugging easy.
         self.maps=dict()
-        if self.layout.ball_carrier == 0:
+        if self.layout.ball.carrier == 0:
             return
-        bc=self.layout.players[self.layout.ball_carrier]
+        bc=self.layout.players[self.layout.ball.carrier]
         self.maps['EZ_dist'] = self.EZ_dist_compute(bc)
         self.maps['pass_dist'] = self.pass_dist_compute(bc)
         self.maps['def_dist'] = self.def_dist_compute(bc)

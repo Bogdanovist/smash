@@ -5,6 +5,7 @@ import scipy.optimize as opt
 from const import *
 import matplotlib.pyplot as plt
 import pylab
+import pdb
 
 class Player(object):
     """
@@ -13,8 +14,11 @@ class Player(object):
     Parameters
     ----------
     team : 1 or -1. Can be interpreted as team=1 -> scores to the right
+    
+    Units:
+    
     """
-    def __init__(self,layout,size,x,y,top_speed,acc,strength,jersey,team,angle_of_motion=0):
+    def __init__(self,layout,size,x,y,top_speed,acc,strength,throw_power,jersey,team,angle_of_motion=0):
         self.layout=layout
         self.size=size
         self.pid=0 # Actual PIDs get set when player is registered to a layout.
@@ -23,6 +27,7 @@ class Player(object):
         self.top_speed=top_speed
         self.acc=acc
         self.strength=strength
+        self.throw_power=throw_power
         self.jersey=jersey
         self.team=team
         self.angle=angle_of_motion
@@ -73,8 +78,8 @@ class Player(object):
         """
         Set objective to ball location
         """
-        self.x_objective = self.layout.xball
-        self.y_objective = self.layout.yball
+        self.x_objective = self.layout.ball.x
+        self.y_objective = self.layout.ball.y
 
     def run_to_goal(self):
         """
@@ -154,7 +159,7 @@ class Player(object):
         """
         Run to ball carrier and try to tackle.
         """
-        dill=self.layout.players[self.layout.ball_carrier]
+        dill=self.layout.players[self.layout.ball.carrier]
 
         if self.dist_to_other(dill) < self.size*1.5:
             self.x_objective = dill.x
@@ -187,15 +192,15 @@ class Player(object):
             self.y_objective=opp.y
         else:
             # If no standing opponents, may as well grab the ball
-            self.x_objective=self.layout.xball
-            self.y_objective=self.layout.yball
+            self.x_objective=self.layout.ball.x
+            self.y_objective=self.layout.ball.y
 
     def protect_ball_carrier(self):
         """
         Get between ball carrier and opponents.
         NOT FINISHED (hardly started)
         """
-        carrier=self.layout.players[self.layout.ball_carrier]
+        carrier=self.layout.players[self.layout.ball.carrier]
         
         # Who to block? We could try and block nearest baddy to us, but they might not be
         # a threat to the carrier. We could try to block the one nearest the carrier, but
@@ -204,72 +209,84 @@ class Player(object):
     def find_space(self):
         """
         Get in a good position for recieving a pass
-        """
-        # Good positions are a trade off between the following:
-        # * Distance to ball carrier (length of pass)
-        # * Distance to end zone
-        # * Distance to defenders (consider their motion?)
-        # * Distance to other recievers (don't crowd the gaps)
-        #
-        # There are many different kernels (gaussian, parabola,...) that could be used for
-        # these as well as tuneable parameters to those kernels. Implement something then
-        # worry later about fine tuning the details.
-        
-        bc=self.layout.players[self.layout.ball_carrier]
-
-        # make list of defenders
-        defenders=list()
-        for p in self.layout.players.values():
-            if p.team != bc.team:
-                defenders.append(p)
-
-        # make list of recievers
-        # For now, all friends are receivers.
-        receivers=list()
-        for p in self.layout.players.values():
-            if p.team == bc.team:
-                receivers.append(p)        
-        
-        # Here are some kernels.
-        # parabolic with weight for now
-        # Ensure the sign is such that "small is good spot to be"
-        # in other words can interpret as a "hazard map"
-        def end_zone_kern(x,y,w=1):#,d=False):
-            #if d:
-            #    return -2*w*bc.dist_to_goal(x=x)*bc.team , 0
-            #else:
-            return w*bc.dist_to_goal(x=x)**2
-
-        def pass_dist_kern(x,y,w=1):
-            dsq=(bc.x-x)**2 + (bc.y-y)**2
-            return w*dsq
-        
-        def def_dist_kern(x,y,w=1):
-            # Find all the distances
-            dlist=list()
-            for p in defenders:
-                dlist.append(np.sqrt((x-p.x)**2 + (y-p.y)**2))
-            return -min(dlist)
-
-        def rec_dist_kern(x,y,w=1):
-            # Find all the distances
-            rlist=list()
-            for p in receivers:
-                rlist.append(np.sqrt((x-p.x)**2 + (y-p.y)**2))
-            return -min(rlist)
-
-        # Pull all the kernels together including a weight vector
-        def rec_hazard(xy,w=(1,1,1,1)):
-            x=xy[0]
-            y=xy[1]
-            return end_zone_kern(x,y,w[0]) + pass_dist_kern(x,y,w[1]) + def_dist_kern(x,y,w[2]) +\
-                rec_dist_kern(x,y,w[3])
-        
+        """        
         # Minimise to find best spot to head towards
-        best_xy = opt.fmin(rec_hazard, np.array( (bc.x,bc.y) ), disp=False)
+        bc=self.layout.players[self.layout.ball.carrier]
+
+        # Try starting from 3 places:
+        # * Your position
+        # * bc positiong
+        # * goal end zone at your y
+        # 
+        # This help avoids getting trapped in local minima, ensuring we check for good short and
+        # long pass options as well as options near to us.
+
+        # Wrapper to hazard function
+        def haz_wrap(xy):
+            return self.layout.helpers['maps'].hazard(xy,self)
+
+        res_bc = opt.fmin(haz_wrap, np.array( (bc.x,bc.y) ), disp=False, full_output=True)
+        #self.layout.helpers['maps'].hazard(res_bc[0],self,debug=True)
+        best_func = res_bc[1]
+        best_xy = res_bc[0]
+        
+        res_self = opt.fmin(haz_wrap, np.array( (self.x,self.y) ),disp=False, full_output=True)
+        #self.layout.helpers['maps'].hazard(res_self[0],self,debug=True)
+        if res_self[1] < best_func:
+            best_func = res_self[1]
+            best_xy = res_self[0]
+        
+        if self.team == 1:
+            ez_x = self.layout.xsize
+        else:
+            ez_x = 0
+        res_ez = opt.fmin(haz_wrap, np.array( (ez_x,self.y) ),disp=False, full_output=True)
+        #self.layout.helpers['maps'].hazard(res_ez[0],self,debug=True)
+        if res_ez[1] < best_func:
+            best_func = res_ez[1]
+            best_xy = res_ez[0]
+
         self.x_objective = best_xy[0]
         self.y_objective = best_xy[1]
+    
+    def run_or_pass(self):
+        """
+        Throw a pass if you think someone is in a better position. Otherwise run yourself.
 
+        TODO: Should require the rx be more than just a bit better since passes are risky.
+        """
+
+        my_hazard = self.layout.helpers['maps'].hazard((self.x,self.y),self)
+
+        rec_hazard=list()
+        for p in self.layout.helpers['maps'].receivers:
+            rec_hazard.append(self.layout.helpers['maps'].hazard((p.x,p.y),p))
+
+        imin_rec = np.argmin(rec_hazard)
+        
+        if my_hazard < rec_hazard[imin_rec]:
+            # I'm in a better position, so I'll run it home
+            self.run_to_goal()
+        else:
+            # Pass to the rx in a better position
+            self.throw_pass(self.layout.helpers['maps'].receivers[imin_rec])
+        
+    def throw_pass(self,rx):
+        """
+        Throw the ball to the specified receiver.
+
+        TODO: Very simplistic to throw to rx position. Instead this routine should evaluate
+        the time the pass might take and project rx position. For any given target location, there
+        is a locus in (angle,power) that will get us there, so this needs to be considered as well.
+        Also need to introduce a skill dependant accuracy and judgement.
+        
+        Parameters
+        ----------
+        rx : The reciever (object)
+        """
+        # Just throw to rx position
+        self.layout.ball.launch(0.,self.throw_power,rx.x,rx.y)
+        
     def move(self):
         """
         Move method for each tick update.
@@ -345,7 +362,7 @@ class Player(object):
         Tuple of the projected phase (x,y, angle, speed) 
         """
         vx, vy = utils.components(self.current_speed,self.angle)
-        ax, ay =  utils.components(self.acc,acc_angle)
+        ax, ay =  utils.components(self.acc*self.layout.dt,acc_angle)
         vx_new, vy_new = (vx + ax,vy + ay)
 
         angle_new = math.atan2(vy_new,vx_new)
@@ -366,7 +383,7 @@ class Player(object):
         """
         hpi = 2*math.atan(1.)
         vx, vy = utils.components(self.current_speed,self.angle+hpi)
-        ax, ay =  utils.components(self.acc,acc_angle+hpi)
+        ax, ay =  utils.components(self.acc*self.layout.dt,acc_angle+hpi)
         vx_new, vy_new = (vx + ax,vy + ay)
 
         angle_new = math.atan2(vy_new,vx_new)
@@ -416,7 +433,7 @@ class Player(object):
         """
         Boolean of whether this player is carrying the ball.
         """
-        if self.pid == self.layout.ball_carrier:
+        if self.pid == self.layout.ball.carrier:
             return True
         else:
             return False

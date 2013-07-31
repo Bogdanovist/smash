@@ -2,8 +2,8 @@ import tools
 import positions
 
 l=tools.Layout(100,50,1000)
-l.xball=30
-l.yball=25
+l.ball.x=30
+l.ball.y=25
 # layout,x,y,jersey,team
 home_runner1=positions.Runner(l,5,20,1,1)
 home_runner2=positions.Runner(l,15,25,2,1)
