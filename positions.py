@@ -133,7 +133,7 @@ class Thrower(player.Player):
         # Class default stats
         size=1.
         top_speed=8.
-        acc=2.5
+        acc=8.
         strength=0.6
         throw_power=40.
         self.find_space_update_time=2.

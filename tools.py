@@ -63,7 +63,8 @@ class Ball(object):
             for p in self.layout.players.values():
                 dist = np.sqrt( (p.x - self.x)**2 + (p.y - self.y)**2)
                 if dist < p.size:
-                    self.carrier = p.pid        
+                    self.carrier = p.pid
+                    self.flying=False
         else:
             # Move ball with ball carrier
             p = self.layout.players[self.carrier]

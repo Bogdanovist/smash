@@ -2,7 +2,7 @@ import tools
 import positions
 
 def runit(display=True):
-    l=tools.Layout(100,50,5,0.1)
+    l=tools.Layout(100,50,50.,0.1)
     l.ball.x=30
     l.ball.y=25
     # layout,x,y,jersey,team

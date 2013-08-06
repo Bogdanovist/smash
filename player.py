@@ -357,11 +357,13 @@ class Player(object):
             print("exc in move",self.y_objective,self.y,self.x_objective,self.x)
             obj_angle = 0.
 
-        try:
-            best_acc = opt.brent(lambda angle : self.eval_move(angle), brack=(-pi,pi))
-        except:
-            best_acc = obj_angle
-        acc_angle = best_acc
+        #try:
+        #    best_acc = opt.brent(lambda angle : self.eval_move(angle), brack=(-pi,pi))
+        #except:
+        #    best_acc = obj_angle
+        #acc_angle = best_acc
+
+        acc_angle = opt.fmin(lambda angle : self.eval_move(angle),obj_angle,xtol=pi/180.,disp=False)
 
         self.x, self.y, self.angle, self.current_speed = self.project_move(acc_angle)
  
@@ -384,6 +386,10 @@ class Player(object):
         self.x = max(self.x,0)
         self.y = min(self.y,self.layout.ysize)
         self.y = max(self.y,0)
+        
+        # DEBUG
+        if self.pid == self.layout.ball.carrier:
+            print(self.pid,self.x,self.y,self.current_speed,self.top_speed)
 
     def eval_move(self,acc_angle):
         """
@@ -412,7 +418,7 @@ class Player(object):
         # Speed limited components
         vx_new, vy_new = utils.components(speed_new,angle_new)
 
-        return  (self.x + vx_new, self.y + vy_new, angle_new, speed_new)
+        return  (self.x + vx_new*self.layout.dt, self.y + vy_new*self.layout.dt, angle_new, speed_new)
 
     def unproject_move(self,acc_angle):
         """
