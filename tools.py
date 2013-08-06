@@ -7,6 +7,7 @@ import json
 import helpers
 import itertools
 import utils
+import pdb
 
 def make_move_dict(pid,x,y,angle,have_ball,state):
     """
@@ -25,19 +26,22 @@ class Ball(object):
     Ball object.
 
     In all functions, 'power' means initial launch velocity.
-
-    TODO: Not real mechanics yet, just aristotelean.
     """
-    g=10 #ms^-2
+    g=20 #ms^-2
+    # NOTE: We fake up air resistance by increasing gravity. This lets us have fast travelling passes
+    # but still with a realistic range. With no resistance and standard gravity a pass that is fast 
+    # enough to outpace a fast player travels way too far.
     def __init__(self,layout,x,y):
         self.layout=layout
         self.x=float(x)
         self.y=float(y)
         self.z=0
-        self.held = False
         self.flying = False
         self.carrier = 0
-    
+        self.throw_pending = False
+        self.xland = None
+        self.yland = None
+
     def move(self):
         """
         Collision detection with the ball. Move ball.
@@ -45,10 +49,15 @@ class Ball(object):
         TODO: Implement catching properly, at the moment anyone will catch if the ball is nearby,
         regardless of z.
         """
-        if self.flying == True:
-            addx, addy = utils.components(self.speed,self.angle)
-            self.x += addx
-            self.y += addy
+        if self.throw_pending:
+            self.throw_pending=False
+            # Check if thrower was tackled just before release
+            if self.carrier != 0:
+                p=self.throw_params
+                self.launch(p[0],p[1],p[2],p[3])
+
+        if self.flying:
+            self.fly_tick()
             
         if self.carrier==0:
             for p in self.layout.players.values():
@@ -57,31 +66,77 @@ class Ball(object):
                     self.carrier = p.pid        
         else:
             # Move ball with ball carrier
-            p = self.layout.players[self.ball.carrier]
+            p = self.layout.players[self.carrier]
             self.x = p.x
             self.y = p.y
 
+    def fly_tick(self):
+        " Iterate one flight tick "
+        addx, addy = utils.components(self.speed*self.layout.dt,self.angle)
+        self.x += addx
+        self.y += addy
+        # Check for out of bounds
+        oob=False
+        if self.x < 0:
+            self.x = 0
+            oob = True
+        elif self.x > self.layout.xsize:
+            self.x = self.layout.xsize
+            oob = True
+        if self.y < 0:
+            self.y = 0
+            oob = True
+        elif self.y > self.layout.ysize:
+            self.y = self.layout.ysize
+            oob = True
+
+        if oob:
+            self.flying = False
+            self.vspeed=0
+            self.speed=0
+            self.z=0
+            self.xland=self.x
+            self.yland=self.y
+        else:
+            self.vspeed += -self.g * self.layout.dt
+            self.z += self.vspeed * self.layout.dt
+            if self.z <= 0.:
+                self.flying = False
+
+    def throw(self,elv,power,target_x,target_y):
+        """
+        Sets a throw up, but doesn't execute. Allows delayed execution to avoid messing up
+        player objectives (i.e. allow predictable triggering of state changes).
+        """
+        self.throw_params=[elv,power,target_x,target_y]
+        self.throw_pending=True
 
     def launch(self,elv,power,target_x,target_y):
         """
         Initialise throw with given angle and power from current ball position.
-
-        TODO: Newtonian mechanics!
         """
-        self.z=20. # Too high for anyone to block
-        self.angle = math.atan2(target_y-self.t,target_x-self.x)
-        self.speed = power
+        self.carrier=0
+        self.z=2. # Assume passes start 2m off the ground.
+        self.angle = math.atan2(target_y-self.y,target_x-self.x)
+        self.speed = power*math.cos(elv)
+        self.vspeed = power*math.sin(elv)
         self.flying = True
+        dist = power**2 * math.sin(2.*elv)/self.g
+        dx, dy = utils.components(dist,self.angle)
+        self.xland = self.x + dx
+        self.yland = self.y + dy
 
     def find_launch_angle(self,power,x_target,y_target):
-        """
-        Returns the angle to launch at for a throw with a given power to a given target location. 
-        NOTE: NOT COMPLETE
-        """
-        d = np.sqrt( (self.x-x_target)**2 + (self.y-y_target)**2)
-        return math.asin(d * self.g / power**2)/2.
+         """
+         Returns the angle to launch at for a throw with a given power to a given target location. 
+         """
+         d = np.sqrt( (self.x-x_target)**2 + (self.y-y_target)**2)
+         # If we can't reach, throw at 45 degrees to at least maximise distance
+         if d > power**2/self.g:
+             return math.acos(0.)/2. # 45 degrees in radians
+         else:
+             return math.asin(d * self.g / power**2)/2.
         
-
     def scatter(self,amount):
         """
         Scatters the ball by up to amount in a random direction.
@@ -95,14 +150,15 @@ class Layout(object):
     """
     Base(?) class for the backdrop in which stuff happens.
     """
-    def __init__(self,xsize,ysize,nsteps,dt=0.1):
+    def __init__(self,xsize,ysize,game_length,dt=0.1):
         self.xsize=float(xsize)
         self.ysize=float(ysize)       
         self.ball=Ball(self,self.xsize/2.,self.ysize/2.)
         self.players=dict()
         self.collisions=list()
-        self.nsteps=nsteps
+        self.game_length=game_length
         self.dt=dt
+        self.nsteps = int(self.game_length/self.dt)
         # Save all moves
         self.moves=list()
         # Store step number
@@ -157,7 +213,7 @@ class Layout(object):
             p.set_color(col)
             
 
-    def run_game(self):
+    def run_game(self,display=True):
         " Run the game "
         # Setup move storage
         self.player_header=dict()
@@ -182,21 +238,22 @@ class Layout(object):
         with open(jfile,'w') as f:
             f.write(json.dumps(self.moves))        
         # Display results
-        fig1=plt.figure()
-        plt.xlim([0,self.xsize])
-        plt.ylim([0,self.ysize])
-        
-        self.plots=list()
-        for p in self.players.values():
-            if p.team == 1:
-                plot_now, = plt.plot([], [], 'ro',markersize=15)
-            else:
-                plot_now, = plt.plot([], [], 'bo',markersize=15)
+        if display:
+            fig1=plt.figure()
+            plt.xlim([0,self.xsize])
+            plt.ylim([0,self.ysize])
+
+            self.plots=list()
+            for p in self.players.values():
+                if p.team == 1:
+                    plot_now, = plt.plot([], [], 'ro',markersize=15)
+                else:
+                    plot_now, = plt.plot([], [], 'bo',markersize=15)
+                self.plots.append(plot_now)
+            plot_now, =  plt.plot([],[],'go')
             self.plots.append(plot_now)
-        plot_now, =  plt.plot([],[],'go')
-        self.plots.append(plot_now)
-        line_ani = animation.FuncAnimation(fig1,self.frame_display,self.frame_data,interval=20,blit=False,repeat=True)
-        plt.show()
+            line_ani = animation.FuncAnimation(fig1,self.frame_display,self.frame_data,interval=20,blit=False,repeat=True)
+            plt.show()
 
     def tick(self):
         """
@@ -453,11 +510,24 @@ class Trigger:
         """
         self.callbacks.append(func)
 
-    def check(self):
+    def condition(self):
         """
-        Define the condition
+        Define condition
         """
         pass
+
+    def check(self):
+        """
+        Check for change in condition
+        """
+        cond=self.condition()
+        if cond and not self.prev:
+            self.prev=True
+            self.broadcast()
+        elif cond:
+            self.prev=True
+        else:
+            self.prev=False
 
     def broadcast(self):
         """
@@ -480,17 +550,6 @@ class BallLoose(Trigger):
             return True
         else:
             return False
-
-    def check(self):
-        " Check if anyone has the ball "
-        cond=self.condition()
-        if cond and not self.prev:
-            self.prev=True
-            self.broadcast()
-        elif cond:
-            self.prev=True
-        else:
-            self.prev=False
             
 class BallHeld(BallLoose):
     """
@@ -503,3 +562,29 @@ class BallHeld(BallLoose):
         else:
             return True
 
+class BallFlying(Trigger):
+    """
+    Ball in the air.
+    """
+    def init(self):
+        " Setup state store "
+        self.prev=self.condition()
+        if self.prev: self.broadcast()
+
+    def condition(self):
+        if self.layout.ball.flying:
+            return True
+        else:
+            return False
+
+class BallLanded(Trigger):
+    def init(self):
+        " Setup state store "
+        self.prev=self.condition()
+        if self.prev: self.broadcast()
+
+    def condition(self):
+        if self.layout.ball.flying:
+            return False
+        else:
+            return True 

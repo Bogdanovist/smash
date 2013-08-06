@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import pylab
 import pdb
 
+fmin_xtol=0.5
+
 class Player(object):
     """
     Player object
@@ -31,6 +33,7 @@ class Player(object):
         self.jersey=jersey
         self.team=team
         self.angle=angle_of_motion
+        self.triggered=True
         # Drag model?
         self.cdrag = self.acc/self.top_speed**2
         #
@@ -48,6 +51,13 @@ class Player(object):
         self.state=1
         # Allocate prone counter
         self.prone=-1
+        @property
+        def objective(self):
+            self._objective()
+        @objective.setter
+        def objective(self,new_objective):
+            self._objective=new_objective
+            self.triggered=True
 
     def set_ai_config(self):
         " Defines postional play."
@@ -57,15 +67,13 @@ class Player(object):
     # These are provided here as a resource for child classes.
     # Objective methods set where you are trying to go, move tries to get you
     # there within the constraints of your motion (i.e. turning rate, speed,...)
-    def objective(self):
-        pass
 
     def objective_sanity(self):
         """
         To be called after objective setting to ensure sensible.
         """
-        sideline_buffer=1.
-        endzone_buffer=-1.
+        sideline_buffer=0.5
+        endzone_buffer=-0.5
         self.x_objective = max(self.x_objective,endzone_buffer)
         self.x_objective = min(self.x_objective,self.layout.xsize-endzone_buffer)
         self.y_objective = max(self.y_objective,sideline_buffer)  
@@ -205,50 +213,68 @@ class Player(object):
         # Who to block? We could try and block nearest baddy to us, but they might not be
         # a threat to the carrier. We could try to block the one nearest the carrier, but
         # there might be one closer to us we could better block??
+    
+    def find_space_entry(self):
+        """
+        Called when triggered.
+        """
+        self.triggered=False
+        # Ensure we run full minimiser
+        self.find_space_update_track=self.find_space_update_time*2.
 
     def find_space(self):
         """
         Get in a good position for recieving a pass
-        """        
+        """     
+        if self.triggered: self.find_space_entry()
+        
         # Minimise to find best spot to head towards
         bc=self.layout.players[self.layout.ball.carrier]
 
-        # Try starting from 3 places:
-        # * Your position
-        # * bc positiong
-        # * goal end zone at your y
-        # 
-        # This help avoids getting trapped in local minima, ensuring we check for good short and
-        # long pass options as well as options near to us.
-
         # Wrapper to hazard function
         def haz_wrap(xy):
-            return self.layout.helpers['maps'].hazard(xy,self)
+            return self.layout.helpers['maps'].rec_hazard_relative(xy,self)
 
-        res_bc = opt.fmin(haz_wrap, np.array( (bc.x,bc.y) ), disp=False, full_output=True)
-        #self.layout.helpers['maps'].hazard(res_bc[0],self,debug=True)
-        best_func = res_bc[1]
-        best_xy = res_bc[0]
+        # We only run full minimizer every ??time??. In other cases, we start from previous stored state.
+        self.find_space_update_track += self.layout.dt
+        if self.find_space_update_track > self.find_space_update_time:
+            self.find_space_update_track=0.
+            # Try starting from 3 places:
+            # * Your position
+            # * bc positiong
+            # * goal end zone at your y
+            # 
+            # This help avoids getting trapped in local minima, ensuring we check for good short and
+            # long pass options as well as options near to us.
+
+            res_bc = opt.fmin(haz_wrap, np.array( (bc.x,bc.y) ), xtol=fmin_xtol, disp=False, full_output=True)
+            best_func = res_bc[1]
+            best_xy = res_bc[0]
         
-        res_self = opt.fmin(haz_wrap, np.array( (self.x,self.y) ),disp=False, full_output=True)
-        #self.layout.helpers['maps'].hazard(res_self[0],self,debug=True)
-        if res_self[1] < best_func:
-            best_func = res_self[1]
-            best_xy = res_self[0]
+            res_self = opt.fmin(haz_wrap, np.array( (self.x,self.y) ),xtol=fmin_xtol, disp=False, full_output=True)
+            if res_self[1] < best_func:
+                best_func = res_self[1]
+                best_xy = res_self[0]
         
-        if self.team == 1:
-            ez_x = self.layout.xsize
+            if self.team == 1:
+                ez_x = self.layout.xsize
+            else:
+                ez_x = 0
+            res_ez = opt.fmin(haz_wrap, np.array( (ez_x,self.y) ),xtol=fmin_xtol, disp=False, full_output=True)
+            if res_ez[1] < best_func:
+                best_func = res_ez[1]
+                best_xy = res_ez[0]
         else:
-            ez_x = 0
-        res_ez = opt.fmin(haz_wrap, np.array( (ez_x,self.y) ),disp=False, full_output=True)
-        #self.layout.helpers['maps'].hazard(res_ez[0],self,debug=True)
-        if res_ez[1] < best_func:
-            best_func = res_ez[1]
-            best_xy = res_ez[0]
+            # Run minimiser from previous stored solution
+            xy = self.find_space_best
+            res = opt.fmin(haz_wrap, np.array( (xy[0],xy[1]) ),xtol=fmin_xtol, disp=False, full_output=True)
+            best_xy = res[0]
 
+        self.find_space_best = best_xy
         self.x_objective = best_xy[0]
         self.y_objective = best_xy[1]
     
+
     def run_or_pass(self):
         """
         Throw a pass if you think someone is in a better position. Otherwise run yourself.
@@ -256,14 +282,16 @@ class Player(object):
         TODO: Should require the rx be more than just a bit better since passes are risky.
         """
 
-        my_hazard = self.layout.helpers['maps'].hazard((self.x,self.y),self)
+        my_hazard = self.layout.helpers['maps'].throw_hazard_absolute((self.x,self.y),self)
 
         rec_hazard=list()
         for p in self.layout.helpers['maps'].receivers:
-            rec_hazard.append(self.layout.helpers['maps'].hazard((p.x,p.y),p))
+            if p.pid == self.pid:
+                continue
+            rec_hazard.append(self.layout.helpers['maps'].rec_hazard_absolute((p.x,p.y),p))
 
         imin_rec = np.argmin(rec_hazard)
-        
+
         if my_hazard < rec_hazard[imin_rec]:
             # I'm in a better position, so I'll run it home
             self.run_to_goal()
@@ -271,7 +299,7 @@ class Player(object):
             # Pass to the rx in a better position
             self.throw_pass(self.layout.helpers['maps'].receivers[imin_rec])
         
-    def throw_pass(self,rx):
+    def throw_pass(self,rec):
         """
         Throw the ball to the specified receiver.
 
@@ -285,11 +313,23 @@ class Player(object):
         rx : The reciever (object)
         """
         # Just throw to rx position
-        self.layout.ball.launch(0.,self.throw_power,rx.x,rx.y)
-        
+        elv = self.layout.ball.find_launch_angle(self.throw_power,rec.x,rec.y)
+        self.layout.ball.throw(elv,self.throw_power,rec.x,rec.y)
+      
+    def catch_ball(self):
+        """
+        Move towards guesstimated destination of pass. Note that the destination is actually the point
+        where the ball is 2 metres of the ground (at least at the moment).
+        """
+        # Complete prescience for now
+        # TODO: Add skill dependant error in estimation
+        self.x_objective = self.layout.ball.xland
+        self.y_objective = self.layout.ball.yland
+
     def move(self):
         """
-        Move method for each tick update.
+        Move method for each tick update. For stated objective, determines best angle to run at
+        given current velocity.
         """
         # We are ignoring \delta_t by calling it unity, so V and A need to be in appropriate
         # units to reflect that.
@@ -316,6 +356,7 @@ class Player(object):
             # div by zero?
             print("exc in move",self.y_objective,self.y,self.x_objective,self.x)
             obj_angle = 0.
+
         try:
             best_acc = opt.brent(lambda angle : self.eval_move(angle), brack=(-pi,pi))
         except:

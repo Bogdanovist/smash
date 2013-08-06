@@ -117,21 +117,30 @@ class Maps(Helper):
         return -min(rlist)
 
     # Pull all the kernels together including a weight vector
-    def hazard(self,xy,p,w=(0.01,0.1,1,1),debug=False):
+    def rec_hazard_relative(self,xy,p,w=(0.01,0.02,1,1)):
+        """
+        Hazard function for recievers when determining where to move.
+        """
         x=xy[0]
         y=xy[1]
-        if debug:
-            print(self.end_zone_kern(p,x,y,w[0]),self.pass_dist_kern(x,y,w[1]),self.def_dist_kern(p,x,y,w[2]),\
-                      self.rec_dist_kern(p,x,y,w[3]))
         return self.end_zone_kern(p,x,y,w[0]) + self.pass_dist_kern(x,y,w[1]) + self.def_dist_kern(p,x,y,w[2]) +\
             self.rec_dist_kern(p,x,y,w[3])
-        
-        # Minimise to find best spot to head towards
-        #best_xy = opt.fmin(rec_hazard, np.array( (bc.x,bc.y) ), disp=False)
-        #self.x_objective = best_xy[0]
-        #self.y_objective = best_xy[1]
 
+    def rec_hazard_absolute(self,xy,p,w=(0.01,0.02,1)):
+        """
+        Hazard function for recievers for comparing different players.
+        """
+        x=xy[0]
+        y=xy[1]
+        return self.end_zone_kern(p,x,y,w[0]) + self.pass_dist_kern(x,y,w[1]) + self.def_dist_kern(p,x,y,w[2])
     
+    def throw_hazard_absolute(self,xy,p,w=(0.01,1)):
+        """
+        Hazard function for throwers to compare their location to rxs.
+        """
+        x=xy[0]
+        y=xy[1]
+        return self.end_zone_kern(p,x,y,w[0]) + self.def_dist_kern(p,x,y,w[1])
 
 
 # This is the early, experimental and slow(!) approach.

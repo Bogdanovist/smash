@@ -3,6 +3,7 @@ Defines player positional behavoiour
 """
 import tools
 import player
+import pdb
 
 class Runner(player.Player):
     """
@@ -15,13 +16,16 @@ class Runner(player.Player):
         top_speed=10. # m/s
         acc=3.0 # m/s/s
         strength=0.6
-        throw_power=60. # m/s
+        throw_power=30. # m/s
+        self.find_space_update_time=2. # Every 2 seconds
         player.Player.__init__(self,layout,size,x,y,top_speed,acc,strength,throw_power,jersey,team)
 
     def set_ai_config(self):
         self.ai_config=list()
         self.ai_config.append((tools.BallLoose,self.ball_loose))
         self.ai_config.append((tools.BallHeld,self.ball_held))
+        self.ai_config.append((tools.BallFlying,self.ball_flying))
+        self.ai_config.append((tools.BallLanded,self.ball_loose))
 
     def ball_loose(self):
         " Set to run straight at the ball "
@@ -40,6 +44,10 @@ class Runner(player.Player):
             # opponent has ball
             self.objective = self.tackle_ball_carrier
 
+    def ball_flying(self):
+        " What to do when the ball is in the air"
+        self.objective = self.catch_ball
+
 class Bruiser(player.Player):
     """
     Simply tries to knock down nearest opponent.
@@ -50,7 +58,7 @@ class Bruiser(player.Player):
         top_speed=6.
         acc=2.0
         strength=1.
-        throw_power=50.
+        throw_power=30.
         player.Player.__init__(self,layout,size,x,y,top_speed,acc,strength,throw_power,jersey,team)
 
     def set_ai_config(self):
@@ -63,7 +71,7 @@ class Bruiser(player.Player):
         self.objective=self.go_psycho
 
     def ball_held(self):
-        " If carrier, run in otherwise go nuts "
+        " If carrier then run in, otherwise go nuts "
         carrier = self.layout.players[self.layout.ball.carrier]
         if self.pid == carrier.pid:
             # I have the ball!
@@ -82,13 +90,16 @@ class Catcher(player.Player):
         top_speed=12.
         acc=4.0
         strength=0.4
-        throw_power=50.
+        throw_power=30.
+        self.find_space_update_time=2.
         player.Player.__init__(self,layout,size,x,y,top_speed,acc,strength,throw_power,jersey,team)
 
     def set_ai_config(self):
         self.ai_config=list()
         self.ai_config.append((tools.BallLoose,self.ball_loose))
         self.ai_config.append((tools.BallHeld,self.ball_held))   
+        self.ai_config.append((tools.BallFlying,self.ball_flying))
+        self.ai_config.append((tools.BallLanded,self.ball_loose))
 
     def ball_loose(self):
         " Get the ball "
@@ -107,6 +118,10 @@ class Catcher(player.Player):
         else:
             # opponent has ball
             self.objective = self.tackle_ball_carrier     
+    
+    def ball_flying(self):
+        " What to do when the ball is in the air"
+        self.objective = self.catch_ball
 
 class Thrower(player.Player):
     """
@@ -120,13 +135,16 @@ class Thrower(player.Player):
         top_speed=8.
         acc=2.5
         strength=0.6
-        throw_power=80.
+        throw_power=40.
+        self.find_space_update_time=2.
         player.Player.__init__(self,layout,size,x,y,top_speed,acc,strength,throw_power,jersey,team)
 
     def set_ai_config(self):
         self.ai_config=list()
         self.ai_config.append((tools.BallLoose,self.ball_loose))
-        self.ai_config.append((tools.BallHeld,self,ball_held))
+        self.ai_config.append((tools.BallHeld,self.ball_held))
+        self.ai_config.append((tools.BallFlying,self.ball_flying))
+        self.ai_config.append((tools.BallLanded,self.ball_loose))
 
     def ball_loose(self):
         " Get the ball "
@@ -144,3 +162,7 @@ class Thrower(player.Player):
         else:
             # opponent has ball
             self.objective = self.tackle_ball_carrier 
+
+    def ball_flying(self):
+        " What to do when the ball is in the air"
+        self.objective = self.catch_ball
