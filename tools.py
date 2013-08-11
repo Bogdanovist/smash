@@ -27,7 +27,7 @@ class Ball(object):
 
     In all functions, 'power' means initial launch velocity.
     """
-    g=20 #ms^-2
+    g=10 #ms^-2
     # NOTE: We fake up air resistance by increasing gravity. This lets us have fast travelling passes
     # but still with a realistic range. With no resistance and standard gravity a pass that is fast 
     # enough to outpace a fast player travels way too far.
@@ -58,13 +58,12 @@ class Ball(object):
 
         if self.flying:
             self.fly_tick()
-            
-        if self.carrier==0:
+        elif self.carrier==0:
+            # Check for loose ball pickup
             for p in self.layout.players.values():
                 dist = np.sqrt( (p.x - self.x)**2 + (p.y - self.y)**2)
                 if dist < p.size:
                     self.carrier = p.pid
-                    self.flying=False
         else:
             # Move ball with ball carrier
             p = self.layout.players[self.carrier]
@@ -73,7 +72,55 @@ class Ball(object):
 
     def fly_tick(self):
         " Iterate one flight tick "
+        # Check for potential catchers
+        # Assume we can only catch if z <= 2 metres.
+        # TODO: Player heights and jumping??
+
         addx, addy = utils.components(self.speed*self.layout.dt,self.angle)
+
+        if self.z <= 2:
+            # Ball at catchable height
+            # Eqn of ball travelling line as ax + bx + c = 0
+            x2 = self.x + addx
+            y2 = self.y + addy
+            a = self.y - y2
+            b = x2 - self.x
+            c = (self.x - x2)*self.y + (y2 - self.y)*self.x
+            midx = (self.x + x2)/2.
+            midy = (self.y + y2)/2.
+            dflight = self.speed*self.layout.dt
+            def catch_score(p):
+                # Returns postion along flight path of ball for given player
+                # Returns None if the player can't catch ball from their position
+                if not p.want_to_catch: 
+                    return None
+                dist = abs(a*p.x + b* p.y + c)/np.sqrt(a**2 + b**2)
+                if dist > p.size: 
+                    return None
+                # Check the position is bracketted in the flight delta
+                elif np.sqrt( (midx-p.x)**2 + (midy-p.y)**2) > dflight/2. + p.size:
+                    return None
+                else:
+                    return np.sqrt((p.x-self.x)**2 + (p.y-self.y)**2)
+            # TODO: At the moment, first eligble catcher automatically catches. Need to implement skill
+            # based chance, constested catches, etc.    
+            best_score=1000.
+            pcatch=None
+            for p in self.layout.players.values():
+                s = catch_score(p)
+                if s != None:
+                    if s < best_score:
+                        best_score=s
+                        pcatch=p
+            if pcatch != None:
+                # Player had made catch
+                print("caught it",pcatch.pid)
+                self.carrier=pcatch.pid
+                self.flying=False
+                self.x = pcatch.x
+                self.y = pcatch.y
+                return
+        
         self.x += addx
         self.y += addy
         # Check for out of bounds
@@ -503,7 +550,8 @@ class Trigger:
         
         Sets all states correctly at start of game.
         """
-        pass
+        if self.condition():
+            self.broadcast()
 
     def add_callback(self,func):
         """
@@ -521,14 +569,16 @@ class Trigger:
         """
         Check for change in condition
         """
-        cond=self.condition()
-        if cond and not self.prev:
-            self.prev=True
+        if self.condition():
             self.broadcast()
-        elif cond:
-            self.prev=True
-        else:
-            self.prev=False
+        #cond=self.condition()
+        #if cond and not self.prev:
+        #    self.prev=True
+        #    self.broadcast()
+        #elif cond:
+        #    self.prev=True
+        #else:
+        #    self.prev=False
 
     def broadcast(self):
         """
@@ -541,13 +591,8 @@ class BallLoose(Trigger):
     """
     Ball dropped etc
     """
-    def init(self):
-        " Setup state store "
-        self.prev=self.condition()
-        if self.prev: self.broadcast()
-
     def condition(self):
-        if self.layout.ball.carrier ==0:
+        if self.layout.ball.carrier ==0 and not self.layout.ball.flying:
             return True
         else:
             return False
@@ -567,25 +612,12 @@ class BallFlying(Trigger):
     """
     Ball in the air.
     """
-    def init(self):
-        " Setup state store "
-        self.prev=self.condition()
-        if self.prev: self.broadcast()
-
     def condition(self):
-        if self.layout.ball.flying:
-            return True
-        else:
-            return False
+        return self.layout.ball.flying
 
-class BallLanded(Trigger):
-    def init(self):
-        " Setup state store "
-        self.prev=self.condition()
-        if self.prev: self.broadcast()
-
-    def condition(self):
-        if self.layout.ball.flying:
-            return False
-        else:
-            return True 
+#class BallLanded(Trigger):
+#    def condition(self):
+#        if self.layout.ball.flying:
+#            return False
+#        else:
+#            return True 

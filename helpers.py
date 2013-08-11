@@ -117,7 +117,7 @@ class Maps(Helper):
         return -min(rlist)
 
     # Pull all the kernels together including a weight vector
-    def rec_hazard_relative(self,xy,p,w=(0.01,0.02,1,1)):
+    def rec_hazard_relative(self,xy,p,w=(0.01,0.0001,1,1)):
         """
         Hazard function for recievers when determining where to move.
         """

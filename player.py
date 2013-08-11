@@ -45,6 +45,8 @@ class Player(object):
         # to get around a blocker to make a tackle, or get clear to make a lead
         # for a pass.
         self.want_to_block=True
+        # Are we trying to catch the ball?
+        self.want_to_catch=False
         # Setup behaviours
         self.set_ai_config()
         # Set to standing
@@ -291,7 +293,7 @@ class Player(object):
             rec_hazard.append(self.layout.helpers['maps'].rec_hazard_absolute((p.x,p.y),p))
 
         imin_rec = np.argmin(rec_hazard)
-
+        print(self.pid,my_hazard,rec_hazard[imin_rec])
         if my_hazard < rec_hazard[imin_rec]:
             # I'm in a better position, so I'll run it home
             self.run_to_goal()
@@ -315,16 +317,41 @@ class Player(object):
         # Just throw to rx position
         elv = self.layout.ball.find_launch_angle(self.throw_power,rec.x,rec.y)
         self.layout.ball.throw(elv,self.throw_power,rec.x,rec.y)
-      
+        # Hack to stop us catching our own pass as we throw it!
+        self.want_to_catch = False
+
     def catch_ball(self):
         """
         Move towards guesstimated destination of pass. Note that the destination is actually the point
-        where the ball is 2 metres of the ground (at least at the moment).
+        where the ball is 2 metres off the ground (at least at the moment).
         """
         # Complete prescience for now
         # TODO: Add skill dependant error in estimation
+        # TODO: Maybe we aren't best placed to catch ball, but might want to block for a team mate?
         self.x_objective = self.layout.ball.xland
         self.y_objective = self.layout.ball.yland
+        self.want_to_catch=True
+
+    def coverage(self):
+        """
+        Cover potential recievers or the ball carrier. Defensive.
+        """
+        dill=None
+        for p in self.layout.helpers['maps'].receivers:
+            haz = self.layout.helpers['maps'].throw_hazard_absolute((p.x,p.y),self)
+            if dill == None:
+                best_haz=haz
+                dill=p
+            else if haz < best_haz:
+                best_haz=haz
+                dill=p
+        if self.dist_to_goal(x=dill.x) > self.forward_limit:
+            # TODO: Don't go further than the forward limit
+            self.x_objective=dill.x
+            self.y_objective=dill.y
+        else:
+            self.x_objective=dill.x
+            self.y_objective=dill.y
 
     def move(self):
         """
@@ -389,7 +416,7 @@ class Player(object):
         
         # DEBUG
         if self.pid == self.layout.ball.carrier:
-            print(self.pid,self.x,self.y,self.current_speed,self.top_speed)
+            print(self.pid,self.team,self.objective,self.layout.ball.carrier)
 
     def eval_move(self,acc_angle):
         """
